@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+runs/
+output/
+.auth/
+local-settings/
+.env
+.env.*
+!.env.example
+*.log
+.playwright-cli/

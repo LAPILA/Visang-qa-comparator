@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Web QA Comparator · QA Workspace</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <main class="layout">
+    <header class="page-header">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">Q</span><div><p class="eyebrow">WEB QA COMPARATOR</p><h1>QA 워크스페이스</h1></div></div>
+      <span class="version-pill">LOCAL · MVP</span>
+      <p class="subtitle">두 환경의 화면과 기능을 확인하고, 발견한 차이를 근거와 함께 검수합니다.</p>
+    </header>
+
+    <div id="errorSection" class="notice error-notice hidden" role="alert"></div>
+    <div id="successSection" class="notice success-notice hidden" role="status"></div>
+
+    <div class="workspace-grid">
+      <section class="panel settings" aria-labelledby="settingsTitle">
+        <div class="section-heading"><div><p class="eyebrow">NEW RUN</p><h2 id="settingsTitle">검사 설정</h2></div><span class="mini-badge">안전한 범위부터</span></div>
+        <form id="scanForm">
+          <div class="two-columns">
+            <label class="field"><span>검사 프로필</span><select id="profileId" name="profileId" required><option value="">프로필 불러오는 중…</option></select></label>
+            <label class="field"><span>실행 담당자</span><input id="operatorId" name="operatorId" required maxlength="50" placeholder="예: qa-a" autocomplete="off" /></label>
+          </div>
+          <p id="profileHint" class="helper">허용된 경로와 동작만 실행합니다. 사용자 지정 URL은 시작 페이지를 기준으로 설정합니다.</p>
+          <div class="two-columns url-fields">
+            <label class="field"><span><i class="site-dot a" aria-hidden="true"></i>기준 A URL</span><input id="baselineUrl" name="baselineUrl" type="url" required maxlength="2000" placeholder="https://baseline.example.test/" autocomplete="off" spellcheck="false" /></label>
+            <label class="field"><span><i class="site-dot b" aria-hidden="true"></i>비교 B URL</span><input id="candidateUrl" name="candidateUrl" type="url" required maxlength="2000" placeholder="https://candidate.example.test/" autocomplete="off" spellcheck="false" /></label>
+          </div>
+          <div class="option-grid">
+            <label class="field"><span>검사 모드</span><select id="mode" name="mode"><option value="combined">화면 + 등록된 기능</option><option value="visual">화면 비교</option><option value="discovery">페이지·동작 발견</option></select></label>
+            <label class="field"><span>환경당 최대 페이지</span><input id="maxPages" name="maxPages" type="number" min="1" max="30" value="10" required /></label>
+            <label class="field"><span>최대 탐색 깊이</span><input id="maxDepth" name="maxDepth" type="number" min="0" max="4" value="2" required /></label>
+            <label class="field"><span>최대 동작 수</span><input id="maxActions" name="maxActions" type="number" min="0" max="200" value="20" required /></label>
+            <label class="field"><span>실행 제한 시간 · 초</span><input id="timeoutSeconds" name="timeoutSeconds" type="number" min="15" max="600" value="300" required /></label>
+            <label class="field"><span>시각 검토 임계값 · %</span><input id="visualThreshold" name="visualThreshold" type="number" min="0.1" max="100" step="0.1" value="2" required /></label>
+          </div>
+          <p class="helper">임계값은 이번 실행의 시각 차이 판정에 적용됩니다. 결과를 좁히는 차이율 필터는 검사 후 별도로 사용할 수 있습니다. 현재 등록 기능 시나리오는 합성 데모에서 제공됩니다.</p>
+
+          <details class="configuration-details">
+            <summary>수동 로그인과 아이디 기억</summary>
+            <div class="details-content">
+              <label class="checkbox-line"><input id="manualLogin" name="manualLogin" type="checkbox" /><span>검사 전에 열린 브라우저에서 직접 로그인</span></label>
+              <p class="helper">로그인 창에 아이디·비밀번호를 직접 입력한 뒤 이 화면에서 ‘로그인 완료 · 계속’을 누릅니다. 이 도구는 비밀번호를 입력받거나 저장하지 않습니다.</p>
+              <label class="checkbox-line"><input id="rememberIds" type="checkbox" /><span>이 브라우저에 아이디만 기억하기</span></label>
+              <div class="two-columns remembered-fields">
+                <label class="field"><span>A 환경 아이디 메모</span><input id="rememberedIdA" maxlength="120" autocomplete="off" placeholder="선택 입력 · 서버 전송 안 함" /></label>
+                <label class="field"><span>B 환경 아이디 메모</span><input id="rememberedIdB" maxlength="120" autocomplete="off" placeholder="선택 입력 · 서버 전송 안 함" /></label>
+              </div>
+              <p class="helper">담당자·프로필·환경별로 이 PC의 브라우저에만 저장합니다. 체크를 해제하면 현재 담당자·프로필의 저장된 아이디를 지웁니다.</p>
+            </div>
+          </details>
+
+          <details class="configuration-details">
+            <summary>고급 설정 · 페이지 매핑, 영역, 허용 동작</summary>
+            <div class="details-content">
+              <p class="helper">기본 탐색은 시작 페이지와 명시한 별칭만 허용합니다. 추가 경로·동작은 검토 후 등록하세요. 전체 허용(*)이나 목적이 불명확한 동작을 허용하지 않습니다. CDN·SSO 등 외부 호스트도 필요한 정확한 호스트만 추가합니다.</p>
+              <label class="field"><span>추가 허용 경로 · 한 줄에 하나</span><textarea id="allowedPaths" rows="3" spellcheck="false" placeholder="/notice/list&#10;/search"></textarea></label>
+              <label class="field"><span>추가 허용 호스트 · 정확한 호스트, 한 줄에 하나</span><textarea id="allowedHosts" rows="3" spellcheck="false" placeholder="cdn.example.test&#10;auth.example.test"></textarea></label>
+              <label class="field"><span>라우트 별칭 · aliases</span><textarea id="aliases" rows="4" spellcheck="false">[]</textarea></label>
+              <label class="field"><span>비교 영역 · regions</span><textarea id="regions" rows="4" spellcheck="false">[]</textarea></label>
+              <label class="field"><span>허용된 동작 · safeActions</span><textarea id="safeActions" rows="4" spellcheck="false">[]</textarea></label>
+              <label class="field"><span>등록 시나리오 ID · scenarioIds</span><textarea id="scenarioIds" rows="2" spellcheck="false">[]</textarea></label>
+            </div>
+          </details>
+          <div class="form-actions"><span id="connectionStatus" class="helper" role="status">서버 연결 중…</span><button class="primary" type="submit" id="startBtn" disabled><span id="startText">검사 시작</span><span aria-hidden="true"> →</span></button></div>
+        </form>
+      </section>
+
+      <aside class="panel history-panel" aria-labelledby="historyTitle">
+        <div class="section-heading"><div><p class="eyebrow">RUN HISTORY</p><h2 id="historyTitle">실행 이력</h2></div><button id="refreshHistory" class="icon-button" type="button" title="실행 이력 새로고침" aria-label="실행 이력 새로고침">↻</button></div>
+        <p class="helper">담당자와 실행을 구분해 이전 증거를 다시 확인합니다.</p>
+        <div id="historyList" class="history-list"><p class="empty compact">실행 이력을 불러오는 중입니다.</p></div>
+      </aside>
+    </div>
+
+    <section class="panel progress hidden" id="progressSection" aria-live="polite" aria-labelledby="progressTitle">
+      <div class="progress-top"><div><p class="eyebrow">ACTIVE RUN</p><h2 id="progressTitle">검사 실행 중</h2><p id="progressMeta" class="helper"></p></div><button id="cancelBtn" type="button" class="secondary danger">실행 중단</button></div>
+      <p id="progressText">브라우저 준비 중</p>
+      <div id="authPanel" class="auth-panel hidden"><p id="authText">열린 브라우저에서 로그인한 뒤 계속해 주세요.</p><button id="continueBtn" class="primary" type="button">로그인 완료 · 계속</button></div>
+      <div class="progress-rail" aria-hidden="true"><div class="progress-fill"></div></div>
+    </section>
+
+    <section id="resultSection" class="hidden" aria-labelledby="resultTitle">
+      <div class="result-heading"><div><p class="eyebrow">EVIDENCE & REVIEW</p><h2 id="resultTitle">검사 결과</h2><p id="resultMeta" class="result-summary"></p></div><div class="export-links"><a id="jsonLink" class="secondary-button" href="#" download>JSON 저장</a><a id="csvLink" class="secondary-button" href="#" download>CSV 저장 ↓</a></div></div>
+      <div id="stats" class="stat-grid"></div>
+      <div id="coverageSummary" class="coverage-summary"></div>
+      <details id="attentionPanel" class="attention-panel hidden"><summary id="attentionSummary">실패 · 실행 오류 확인</summary><div id="attentionList"></div></details>
+      <div class="panel results-panel">
+        <div class="results-toolbar"><div class="filter-set" role="group" aria-label="검사 결과 상태 필터"><button type="button" data-filter="ALL" class="filter active" aria-pressed="true">전체</button><button type="button" data-filter="FAIL" class="filter" aria-pressed="false">FAIL</button><button type="button" data-filter="ERROR" class="filter" aria-pressed="false">ERROR</button><button type="button" data-filter="REVIEW" class="filter" aria-pressed="false">REVIEW</button><button type="button" data-filter="SKIP" class="filter" aria-pressed="false">SKIP</button><button type="button" data-filter="PASS" class="filter" aria-pressed="false">PASS</button></div><span id="resultCount" class="helper"></span></div>
+        <div class="filter-grid">
+          <label class="field search-field"><span>기능·경로·오류 검색</span><input id="searchFilter" type="search" placeholder="검색어, URL, 오류 내용" autocomplete="off" /></label>
+          <label class="field"><span>비교 영역</span><select id="regionFilter"><option value="ALL">모든 영역</option></select></label>
+          <label class="field"><span>최소 차이율 · %</span><input id="diffMin" type="number" min="0" max="100" step="0.01" placeholder="0" /></label>
+          <label class="field"><span>최대 차이율 · %</span><input id="diffMax" type="number" min="0" max="100" step="0.01" placeholder="100" /></label>
+          <label class="checkbox-line null-filter"><input id="includeNull" type="checkbox" checked /><span>비교 불가 포함</span></label>
+        </div>
+        <p id="filterWarning" class="filter-warning hidden" role="status">최소 차이율은 최대 차이율보다 클 수 없습니다.</p>
+        <div class="table-head"><span>페이지 / 영역</span><span>판정</span><span>관찰 유형</span><span>시각 차이</span><span>검수</span></div>
+        <div id="resultRows"></div>
+        <p id="emptyMessage" class="empty hidden">조건에 맞는 검사 결과가 없습니다.</p>
+      </div>
+      <p class="footnote">PASS는 실행된 검증식만 통과했다는 뜻입니다. REVIEW는 검토 필요, SKIP은 미실행, ERROR는 도구·수집·비교 실패입니다. 담당자의 최종 검수는 자동 판정을 덮어쓰지 않고 이력으로 남습니다.</p>
+    </section>
+    <footer>Web QA Comparator · 근거가 있는 판정, 재현 가능한 검수</footer>
+  </main>
+</body>
+</html>
