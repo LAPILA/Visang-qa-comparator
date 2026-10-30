@@ -2,13 +2,16 @@
 
 > 전체 목표 설계입니다. 후속 MVP의 구현·실행 검증·설계와의 차이는 [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)를 참고하세요.
 
-작성일: 2026-10-30 (KST). **이 문서는 구현 제안이다.** 현재 구현·실행 검증은 [AS_IS_ARCHITECTURE.md](AS_IS_ARCHITECTURE.md), 요구사항별 상태는 [REQUIREMENTS_AND_GAPS.md](REQUIREMENTS_AND_GAPS.md)를 따른다. 기존 Python 동기 Playwright·Pillow와 순수 JS UI를 우선 재사용한다.
+> 2026-10-30 추가 반영: 테스트 유형 4종, 목표 결과 상태 7종, 오류 유형·중복 처리, 결과 화면 구성. 현재 MVP의 5상태 구현과 구분한다. 추가 요구사항은 [REQUIREMENTS_AND_GAPS.md](REQUIREMENTS_AND_GAPS.md)의 8절을 따른다.
+
+작성일: 2026-10-30 (KST). **이 문서는 구현 제안이다.** 현재 구현·실행 검증은 [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md), 이전 코드 감사는 [AS_IS_ARCHITECTURE.md](AS_IS_ARCHITECTURE.md), 요구사항별 상태는 [REQUIREMENTS_AND_GAPS.md](REQUIREMENTS_AND_GAPS.md)를 따른다. 기존 Python 동기 Playwright·Pillow와 순수 JS UI를 우선 재사용한다.
 
 근거 약칭: `OLD` = `C:/Users/ASUS/Downloads/web-qa-comparator/web-qa-comparator`, `EPC` = `C:/Users/ASUS/Desktop/viva-e-pc`, `MVMH` = `C:/Users/ASUS/Desktop/viva-mv-mh`, `SPEC` = `C:/Users/ASUS/Downloads/web-qa-planning-docs/web-qa-planning/QA_AUTOMATION_PROJECT_SPEC.md`. 회사 샘플은 비교 대상의 표본이며 Comparator 구현 증거가 아니다. 이 문서의 예시 URL·값·한도는 검증 성과가 아니다.
 
 ## 1. 검사 범위와 환경 프로필
 
-- 한 run은 **동일 제품·디바이스의 환경 A/B 한 쌍**만 비교한다. PC↔모바일을 동일 화면으로 비교하지 않는다. 운영을 절대적인 정답으로 간주하지 않고 양쪽을 독립 검증한다.
+- 테스트 목적은 **단일 환경 QA·환경 비교 QA·회귀 테스트·조건 기반 UI QA**로 구분한다. 단일 환경은 대상 하나, 환경 비교는 동일 제품·디바이스의 A/B 한 쌍, 회귀는 비교 가능한 과거/현재 실행, 조건 기반 검사는 지정한 데이터·화면 조건을 사용한다. 목적과 탐색/시각/시나리오/통합 검사 구성은 별도로 기록한다.
+- 환경 비교에서는 운영↔스테이징, 개발1↔개발2 등 임의의 환경을 선택한다. PC↔모바일을 동일 화면으로 비교하지 않는다. 운영을 절대적인 정답으로 간주하지 않고 양쪽을 독립 검증한다.
 - 제품별 `site_profile_id`에 시작 URL, 허용 navigation/resource/auth 호스트, route 방식, viewport, 준비 조건, 영역, 안전 행동, 시나리오를 명시한다.
 - 실제 사이트 주소 목록과 미확인 STG 주소는 [결정 문서의 환경표](DECISIONS_AND_OPEN_QUESTIONS.md#2-비교-환경-등록표)에 둔다. 이번 감사에서는 실제 사이트 접속·로그인·크롤링을 하지 않았다.
 - 1주 MVP는 초등 PC 프로필 한 개와 합성 데모를 대상으로 한다. 모바일 hash route는 로컬 회귀 테스트로 우선 보장하고, 4개 서비스 전체 자동화 완료로 표현하지 않는다.
@@ -23,7 +26,7 @@
 2. `a[href]`, button, input(특히 submit/image 포함), role=button/tab/link, tabindex, adapter가 지정한 onclick 요소를 **후보 목록**에 수집한다. submit도 발견 후 위험 등급으로 실행을 통제한다. 비밀번호·개인정보 입력값은 읽어 저장하지 않는다. 프레임은 허용 origin/adapter가 있는 경우만 포함한다. Shadow DOM·가상 목록·canvas 미지원은 누락 사유로 남긴다.
 3. 후보에는 accessible role/name, selector 대안, href/form action, 부모 region, disabled/visible 상태, 프레임 경로, 관찰 시점을 저장한다. ID·개인정보가 들어간 원문은 저장 전에 제거한다.
 4. 숨겨진 메뉴의 승인된 열기 동작 후 재수집한다. 무작위 hover/click으로 전체 DOM을 탐색하지 않는다.
-5. `page_class + route_state + 승인된 UI 상태 + 필터/페이지번호`로 state key를 만든다. 공지 제목·시간·배너 회전값은 중복 상태 판별 키에서 제외한다. 새 상태가 예산을 넘으면 `SKIP/LIMIT_REACHED`를 기록한다.
+5. `page_class + route_state + 승인된 UI 상태 + 필터/페이지번호`로 state key를 만든다. 공지 제목·시간·배너 회전값은 중복 상태 판별 키에서 제외한다. 새 상태가 예산을 넘으면 `BLOCKED/LIMIT_REACHED`를 기록한다.
 
 근거: 기존 발견은 `OLD/app.py:103–115,219–228`의 anchor 수집뿐이다. `MVMH/frontend/src/components/main/MainSearch.js:26,64,80,94–96`, `MVMH/frontend/src/containers/cs/NoticeListContainer.js:129`에는 href 없는 동작이 있다.
 
@@ -78,7 +81,7 @@ listener는 페이지 이동/행동 전에 context 및 page에 부착한다. 원
 
 | 관찰 | 기본 판정 | 예외·확인 조건 |
 |---|---|---|
-| 필수 document 404/500 | 명시된 route/status 계약 위반이면 FAIL | 인증 선행 실패면 보호 페이지 check는 SKIP; 원인 check 별도 |
+| 필수 document 404/500 | 명시된 route/status 계약 위반이면 FAIL | 인증 선행 실패면 보호 페이지 check는 BLOCKED; 원인 check 별도 |
 | 필수 first-party 조회 API 500 | expected 2xx 계약이 있으면 FAIL | 명세 없으면 REVIEW, 화면 영향 근거 추가 |
 | API 400 | 상태만으로 경미/치명 결정 금지 | 잘못된 입력 테스트의 기대 400이면 해당 assertion PASS; 정상 입력의 계약 위반이면 FAIL |
 | 로그인 상태 확인 401 | 승인된 익명 상태 계약이면 예상 이벤트 | 로그인 상태에서 발생하면 REVIEW/계약 FAIL; 광역 401 무시는 금지 |
@@ -92,6 +95,35 @@ HTTP 404/503도 응답을 받으면 `requestfailed`와 다른 경로로 관찰�
 
 예외 규칙에는 ID, 환경, endpoint pattern, method, resource type, 상태 코드, 기대 인증 상태, 사유, 작성자, 만료일, 적용 횟수를 둔다. 예외는 관찰 삭제가 아닌 판정 근거이며, 만료 시 REVIEW로 돌아간다.
 
+### 4.1 오류 유형 분류
+
+판정 상태는 검사 결론이고 오류 유형은 관찰한 문제의 종류다. 같은 유형도 기대값·사전 조건에 따라 다른 상태가 된다. 데이터 차이가 항상 오류는 아니므로 전체 목록은 “발견 사항”으로 표시한다. PASS나 정책상 SKIP에는 오류 유형이 없을 수 있다.
+
+| 대분류 코드 | 분류 | 세부 코드 예시 | 관찰·검증 예시 |
+|---|---|---|---|
+| HTTP | HTTP 응답 | HTTP_4XX, HTTP_5XX, UNEXPECTED_STATUS | 페이지·리소스의 예상하지 않은 상태 |
+| NETWORK | 연결·전송 | DNS_FAILED, TLS_FAILED, REQUEST_TIMEOUT, CONNECTION_FAILED | 연결·전송 실패 |
+| JAVASCRIPT | 클라이언트 실행 | UNCAUGHT_EXCEPTION, UNHANDLED_REJECTION, CONSOLE_ERROR | JS 예외·Promise·콘솔 오류 |
+| API | API 계약·응답 | API_STATUS_MISMATCH, API_SCHEMA_MISMATCH, API_BUSINESS_FAILURE | 상태·필수 필드·업무 결과 위반 |
+| RESOURCE | 이미지·정적 파일 | IMAGE_LOAD_FAILED, SCRIPT_LOAD_FAILED, STYLESHEET_LOAD_FAILED, FONT_LOAD_FAILED | 필요한 파일 로딩 실패 |
+| NAVIGATION | 링크·이동 | BROKEN_LINK, WRONG_DESTINATION, REDIRECT_LOOP, HISTORY_MISMATCH | 목적지·라우팅·뒤로가기 이상 |
+| STRUCTURE | DOM·구성 요소 | REQUIRED_ELEMENT_MISSING, VISIBILITY_MISMATCH, ELEMENT_COUNT_MISMATCH | 필수 요소 누락·숨김·개수 불일치 |
+| FUNCTIONAL | 기능 동작 | SEARCH_RESULT_MISMATCH, VALIDATION_MISMATCH, INTERACTION_MISMATCH | 검색·입력·탭·페이지네이션 계약 위반 |
+| VISUAL | 시각·레이아웃 | REGION_DIFF, TEXT_OVERFLOW, ELEMENT_OVERLAP, LAYOUT_SHIFT | 이미지 차이·잘림·겹침·배치 변화 |
+| DATA | 데이터·표시 조건 | CONTENT_DIFF, EMPTY_DATA, INSUFFICIENT_DATA, DISPLAY_CONDITION_MISMATCH | 데이터 차이·부족·노출 조건 불일치 |
+| AUTH | 인증·권한 | LOGIN_REQUIRED, SESSION_EXPIRED, ROLE_UNAVAILABLE, ACCESS_DENIED | 로그인 필요·만료·권한 부족 |
+| TEST_INFRA | 검사 도구·설정 | BROWSER_LAUNCH_FAILED, CAPTURE_FAILED, COMPARE_FAILED, EVIDENCE_SAVE_FAILED, MAPPING_UNRESOLVED | 브라우저·수집·비교·저장·매핑 문제 |
+
+위 코드는 목표 분류안이다. 모든 항목의 자동 탐지가 구현되었다는 의미는 아니다. 세부 코드와 판정 사유 `reason_code`는 구분하며, API 스키마·업무 결과·잘림·겹침 등은 별도 계약과 수집기가 필요하다. HTTP 상태·요청 method·resource type·출처는 유형과 별도로 보존한다.
+
+### 4.2 대표 유형과 중복 처리
+
+- 이미지 요청 404는 `RESOURCE / IMAGE_LOAD_FAILED`를 대표 유형으로 두고 HTTP 404 사실과 관련 태그를 보존한다. HTTP·RESOURCE·VISUAL 세 건으로 단순 합산하지 않는다.
+- API 계약 검사에서 500이 발생하면 `API / API_STATUS_MISMATCH`를 대표 유형으로 두고 기대 상태와 실제 HTTP 상태를 함께 기록한다. 계약이 없다면 HTTP 관찰은 보존하되 API 계약 위반으로 확정하지 않는다.
+- 대표 유형은 검증한 대상 계약으로 선택한다. 버튼 존재 검사는 STRUCTURE, 버튼을 통한 기능 검사는 FUNCTIONAL이다. 관련 발견 사항을 연결하되 같은 원인인지는 근거 없이 확정하지 않는다.
+- 동일 요청·환경·페이지·단계·규칙의 반복 관찰을 묶고 발생 횟수·최초/최종 시점을 보존한다. 서로 다른 환경이나 별도 검증식의 결과는 삭제하지 않는다.
+- 원시 관찰 수, 결과 행 수, 중복을 묶은 고유 발견 사항 수, 연결된 이슈 수를 구분한다. fingerprint의 구체 형식은 구현 전 계약으로 확정한다.
+
 ## 5. 시각·DOM·CSS 및 데이터 검증
 
 ### 5.1 준비 조건과 영역
@@ -103,23 +135,23 @@ viewport/DPR/브라우저 빌드/OS·폰트/locale/timezone/color scheme/인증 
 - 픽셀: 동일 capture 조건과 크기에서 비교. component crop/overlay/변경 bounding box를 함께 제공한다. region 위치 이동은 crop 비교로 놓칠 수 있어 layout check가 별도로 필요하다.
 - DOM: role/name/필수 요소·계층·행 구조를 비교한다. 전체 innerHTML 문자열 diff는 동적 ID 때문에 기본 사용하지 않는다.
 - CSS/layout: 승인 속성(font/size/spacing/color/display)과 element rect, overflow/clipping, 클릭 타깃 노출을 검사한다. 의도된 overlay·줄임표·가로 스크롤은 계약으로 구분한다. rect 교차만으로 전부 겹침 버그로 확정하지 않는다.
-- 스크린샷·이미지 처리 실패/크기 불일치는 해당 비교 check의 `ERROR`이며 0%·PASS로 치환하지 않는다. 유효한 adapter와 준비된 화면에서 명세상 필수 region/버튼이 없으면 **존재 assertion은 FAIL**이다. selector/adapter 자체의 오류는 ERROR, 인증·정책 전제 미충족은 SKIP으로 구분한다. 필수 영역이 없어 수행할 수 없는 후속 이미지 비교는 선행 실패를 연결하고 SKIP한다.
+- 스크린샷·이미지 처리 실패/크기 불일치는 해당 비교 check의 `ERROR`이며 0%·PASS로 치환하지 않는다. 유효한 adapter와 준비된 화면에서 명세상 필수 region/버튼이 없으면 **존재 assertion은 FAIL**이다. selector/adapter 자체의 오류는 ERROR, 인증·데이터 전제 미충족은 BLOCKED, 정책 제외는 SKIP으로 구분한다. 필수 영역이 없어 수행할 수 없는 후속 이미지 비교는 선행 실패를 연결하고 BLOCKED로 기록한다.
 
-원시 차이율 = 변경 픽셀 / 전체 비교 픽셀 × 100, 정책 적용 차이율 = 변경된 유효 픽셀 / 마스킹을 제외한 유효 픽셀 × 100. 비교 영역이 0이면 `SKIP/NO_COMPARABLE_PIXELS`. 알고리즘·픽셀 감도·region threshold·mask version을 저장한다. 기존 Pillow 처리(`OLD/app.py:234–257`)는 재사용하되 기존 회색조 변환/감도 25가 작은 색상 차이를 놓칠 수 있는지 합성 fixture로 검증하고 임계값을 조정한다.
+원시 차이율 = 변경 픽셀 / 전체 비교 픽셀 × 100, 정책 적용 차이율 = 변경된 유효 픽셀 / 마스킹을 제외한 유효 픽셀 × 100. 비교 영역이 0이면 목표 설계에서는 `BLOCKED/NO_COMPARABLE_PIXELS`로 기록한다. 현재 MVP의 ERROR 처리와 구분하며 적용 전 계약을 확정한다. 알고리즘·픽셀 감도·region threshold·mask version을 저장한다. 기존 Pillow 처리(`OLD/app.py:234–257`)는 재사용하되 기존 회색조 변환/감도 25가 작은 색상 차이를 놓칠 수 있는지 합성 fixture로 검증하고 임계값을 조정한다.
 
-**시각 차이 자체는 REVIEW.** 승인된 필수 요소 부재·버튼 잘림·명세 기반 위치 허용범위 위반만 해당 assertion FAIL이다. 화면이 비슷하면 동일 페이지의 후보가 될 수 있지만 기능이 다르면 매칭할 수 없다.
+**비교 가능한 증거에서 확인한 시각 차이 자체는 DIFF다.** 매칭·준비 조건·증거가 불명확하면 REVIEW다. 승인된 필수 요소 부재·버튼 잘림·명세 기반 위치 허용범위 위반만 해당 assertion FAIL이다. 화면이 비슷하면 동일 페이지의 후보가 될 수 있지만 기능이 다르면 매칭할 수 없다.
 
 ### 5.2 데이터 모드
 
 | 모드 | A/B 값 비교 | 독립 검증 | 한계 |
 |---|---|---|---|
 | LIVE_INDEPENDENT (기본) | 공지 제목·개수·날짜·ID·자료·배너·검색 결과의 직접 일치 제외 | 각 환경의 목록/빈 상태/필수 필드/상세 연결/검색·필터·레이아웃 | DB 실제 일치성·검색 정답 데이터는 입증하지 못함 |
-| SHARED_FIXTURE | 승인된 stable key로 동일 데이터 대응 시만 허용 | fixture 사전조건/계약/정확한 기대값 | 운영에 fixture를 쓰지 않음; 준비 실패는 ERROR/SKIP |
+| SHARED_FIXTURE | 승인된 stable key로 동일 데이터 대응 시만 허용 | fixture 사전조건/계약/정확한 기대값 | 운영에 fixture를 쓰지 않음; 도구 오류는 ERROR, 데이터 전제 미충족은 BLOCKED |
 | MOCK_UI | 같은 승인 API 응답에 UI 값·배치 비교 | 빈 결과/긴 제목/다국어/오류 상태 | 실제 API·DB 정상성 입증 불가; LIVE 결과와 분리 |
 
 API mocking 자체는 Playwright의 기존 기능으로 구현할 수 있다. [Network 공식 문서](https://playwright.dev/python/docs/network). 공통 fixture는 별도 테스트 환경·승인된 생성/정리 절차에서만 사용하며 이번 단계에서는 DB에 접근하지 않는다.
 
-LIVE 예: “홈 전체 다름” 대신 `home.notice.title / DATA_DIFF / 정책=LIVE_INDEPENDENT / 값 비교 제외`를 표시한다. 값 제외는 기록 삭제가 아니다. 해당 영역의 컨테이너·제목 노출·겹침·자세히보기는 별도 check로 유지한다. 허용된 값 차이는 정보 관찰로 남기고, 정책 범위를 벗어난 콘텐츠 차이는 REVIEW다. 데이터만 다르고 명시된 구조 assertion이 통과했다면 그 assertion은 PASS일 수 있지만 두 DB가 같다는 뜻은 아니다.
+LIVE 예: “홈 전체 다름” 대신 `home.notice.title / DATA_DIFF / 정책=LIVE_INDEPENDENT / 값 비교 제외`를 표시한다. 값 제외는 기록 삭제가 아니다. 해당 영역의 컨테이너·제목 노출·겹침·자세히보기는 별도 check로 유지한다. 허용된 값 차이는 정보 관찰로 남기고, 비교 가능한 콘텐츠 차이는 DIFF, 비교 근거가 부족하면 REVIEW다. 데이터만 다르고 명시된 구조 assertion이 통과했다면 그 assertion은 PASS일 수 있지만 두 DB가 같다는 뜻은 아니다.
 
 검색 결과에 키워드 문자열이 반드시 포함되어야 한다는 계약도 임의로 만들지 않는다(동의어·형태소 검색 가능). LIVE는 입력 전달·요청 조건·로딩 종료·결과 또는 없음 상태와 이동 계약을 검사하고, 정확한 결과 집합은 fixture 명세에서만 판정한다.
 
@@ -129,6 +161,15 @@ LIVE 예: “홈 전체 다름” 대신 `home.notice.title / DATA_DIFF / 정책
 - 조회 필터: 상태, 환경, page class, region, scenario, category, reviewer, `diff_min/max`, 비교 불가 포함 여부.
 - 조회 필터는 저장된 PASS/FAIL을 다시 계산하지 않는다. 정책 재판정은 원본 run을 덮어쓰지 않고 별도 evaluation version으로 연결한다.
 - 0%는 수치 0, 비교 불가는 null + reason이다. CSV에서도 구분한다. 화면 차이가 작아도 HTTP/기능 FAIL은 별도 “치명 이슈” 목록에 남겨 시각 필터 때문에 숨겨지지 않게 한다.
+
+### 5.4 결과 화면 구성
+
+- **요약**: 7상태별 개수, 방문·검증·차단·제외 범위, 고유 발견 사항 수, 연결된 이슈 수를 표시한다. 동일 현상이 여러 페이지/영역 행에 나타날 수 있으므로 행 수를 독립 버그 수로 표시하지 않는다.
+- **필터**: 테스트 유형, 환경, 상태, 오류 대분류·세부 유형, 심각도, 검수 상태, 회귀 구분을 제공한다. 기존 차이율·비교 불가·영역·검색 필터도 유지한다.
+- **목록**: 페이지/영역, 판정, 대표 유형, 관찰 내용 요약, 검수 상태, 이슈 연결 상태를 표시한다. 데이터 차이·검사 차단을 모두 확정 오류로 부르지 않는다.
+- **상세**: 기대값·실제값, 사전 조건, 스크린샷·차이 이미지, 요청·콘솔 정보, 원인 후보와 근거, 검수·변경 이력을 연결한다. 환경 비교 증거에는 A/B 출처를, 단일 환경에는 해당 환경을, 회귀 비교에는 과거/현재 실행을 명시한다.
+
+이슈 연결·회귀 구분·원인 후보가 아직 없으면 미등록/미평가로 표시한다. 데이터 부재를 정상·해결로 추정하지 않는다. 자동 판정과 검수는 별도이며, 화면 필터로 저장된 판정을 바꾸지 않는다. 이는 목표 화면 요구사항으로 현재 UI의 구현 완료를 의미하지 않는다.
 
 ## 6. 기능 시나리오 확장 계약
 
@@ -145,7 +186,7 @@ MVP는 Python의 등록된 함수/클래스로 시나리오를 구현한다. JSO
 | PolicyEvaluator | `evaluate(observations, assertions, policy) -> CheckResult` | 상태/심각도/사유; UI와 분리 |
 | ResultStore | `append_result`, `append_review(expected_revision)`, `get_run` | 불변 결과·검수 이력·충돌 검사 |
 
-`ScenarioContext` 필수값: run/environment/operator/profile, page/context, adapter, data_policy, collector, evidence_writer, budget, cancel_token. 시나리오는 직접 다른 환경의 DB를 조회하거나 임의 URL로 이동하지 않는다. `scenario_id/version`, 요구사항 ID, page class, 승인 행동 목록, 데이터 모드, 입력 fixture, 전제조건, ready 조건, timeout, cleanup, 검증식 ID를 등록한다. prerequisite 미충족은 SKIP, 기대값 미정은 REVIEW, 실행기 예외는 ERROR로 반환한다.
+`ScenarioContext` 필수값: run/environment/operator/profile, page/context, adapter, data_policy, collector, evidence_writer, budget, cancel_token. 시나리오는 직접 다른 환경의 DB를 조회하거나 임의 URL로 이동하지 않는다. `scenario_id/version`, 요구사항 ID, page class, 승인 행동 목록, 데이터 모드, 입력 fixture, 전제조건, ready 조건, timeout, cleanup, 검증식 ID를 등록한다. prerequisite 미충족은 BLOCKED, 기대값 미정은 REVIEW, 실행기 예외는 ERROR로 반환한다.
 
 검색은 Enter/버튼과 결과 상태를, 길이 제한은 N−1/N/N+1·붙여넣기·공백·한글·이모지를, history는 브라우저 back/forward와 UI back을 분리한다. `maxlength` 발견만으로 정식 요구사항 N을 확정하지 않는다. UTF-16 code unit/문자/grapheme/byte 중 어떤 단위인지 TC에 적고, IME 조합을 일반 fill 테스트로 검증했다고 주장하지 않는다. 합성 입력 N=10 같은 데모와 실제 제품 N은 별개다.
 
@@ -198,17 +239,27 @@ MVP는 Python의 등록된 함수/클래스로 시나리오를 구현한다. JSO
 
 ## 8. 자동 상태·심각도·QA 최종 검수
 
+목표 결과 상태는 다음 7종이다. 현재 MVP의 5상태 구현과 과거 저장 결과는 별도이며, 기존 REVIEW/SKIP을 근거 없이 DIFF/BLOCKED로 일괄 변경하지 않는다.
+
 | 상태 | 판정 조건 | 예 |
 |---|---|---|
 | PASS | 전제조건과 명시된 assertion이 실행되어 참 | 검색 요청 값이 입력과 같음; 정해진 결과 상태 표시 |
 | FAIL | 제품 기대 동작/계약이 실행 가능한 조건에서 거짓임을 증거로 확인 | 필수 버튼 없음, 정상 조회 API 계약 위반, 뒤로가기 상태 불일치 |
-| REVIEW | 관찰은 있으나 기대값·동일성·원인이 모호 | 시각 차이, 매칭 후보, 미정 검색 복원 정책 |
-| SKIP | 실행 전제/정책/범위·예산으로 실행하지 않음 | 위험 행동, 권한 없음, 한도 초과, 해당 환경에서 기능 미제공 |
+| DIFF | 환경 간 차이를 확인했으나 오류 여부 미확정 | 비교 가능한 A/B의 시각·콘텐츠 차이 |
+| SKIP | 설정·검사 범위·안전 정책에 따라 제외 | 위험 행동 차단, 선택하지 않은 검사 |
+| BLOCKED | 실행에 필요한 데이터·권한 등 사전 조건 미충족 | 로그인 필요, 최소 표본 데이터 부족 |
 | ERROR | 테스트 실행기/수집/비교/증거 실패로 판정 불가 | browser crash, locator adapter 오류, 이미지 파싱 실패 |
+| REVIEW | 증거 부족·기대값 미정으로 수동 검토 필요 | 매칭 후보, 미정 검색 복원 정책, 원인 판단 근거 부족 |
 
-Timeout은 일괄 FAIL이 아니다. 필수 화면의 준비 SLA가 명세에 있고 제품 응답 실패를 확인하면 FAIL, runner/selector 문제면 ERROR, 인증 등의 선행조건이면 SKIP, 원인 불명이면 REVIEW다. 심각도는 `CRITICAL/HIGH/MEDIUM/LOW/NONE`으로 상태와 분리하며 HTTP 400 또는 DB 차이라는 이름만으로 낮추지 않는다.
+DIFF는 차이가 확인된 상태이고 REVIEW는 판단 근거가 부족한 상태다. DIFF에도 별도 검수 대기를 연결할 수 있다. API 500 같은 서비스 관찰은 실행기 ERROR와 구분하고 기대 계약 위반이면 FAIL로 판정한다. 기대값 없이 HTTP 코드나 요소 미표시만으로 FAIL을 확정하지 않는다.
 
-집계는 check 단위 상태와 coverage를 항상 함께 보여준다. 페이지 대표 배지는 **FAIL 우선, 그다음 ERROR, REVIEW, 필수 check SKIP, 마지막 PASS**로 제안한다. 필수 check가 하나도 실행되지 않았으면 SKIP이며 모든 check가 PASS이고 필수 누락이 없을 때만 PASS다. 선택 제외 항목은 분모와 제외 사유를 명시한다. FAIL과 ERROR가 동시에 있으면 대표 FAIL 옆에 ERROR 수·불완전 실행 표시를 보존한다. run 완료 여부(`COMPLETED/PARTIAL/CANCELLED/ERROR`)는 제품 품질 판정과 다른 필드다.
+필수 데이터 부족은 BLOCKED지만, “데이터 0건이면 빈 목록 안내 표시” 계약을 실제 검사했다면 PASS/FAIL이다. Timeout은 일괄 FAIL이 아니다. 필수 화면 준비 SLA 위반을 확인하면 FAIL, runner/selector 문제면 ERROR, 인증 선행조건 미충족이면 BLOCKED, 원인 불명이면 REVIEW다. 심각도는 기존 `CRITICAL/HIGH/MEDIUM/LOW/NONE`을 유지하고 상태와 분리한다.
+
+시간·페이지·행동 한도에 막힌 미실행 check는 `BLOCKED/LIMIT_REACHED`로 기록하는 안을 제안한다. 구체 한도별 코드는 구현 전 확정한다. 사용자가 취소한 실행은 별도 `CANCELLED`로 기록하고 완료한 check와 미실행 사유를 보존한다.
+
+집계는 check별 7상태 수와 coverage를 함께 표시한다. 대표 배지 우선순위는 **FAIL → ERROR → 필수 BLOCKED → REVIEW → DIFF → 필수 SKIP → PASS**로 제안한다. 필수 검증이 모두 통과하고 미확인 차이·판정 불가·필수 누락이 없을 때만 대표 PASS다. 전부 설정 제외라면 SKIP이며 미실행을 PASS로 만들지 않는다. 다른 상태가 함께 있으면 대표 배지 옆에 개수와 불완전 실행 여부를 보존한다.
+
+run 완료 여부(`COMPLETED/PARTIAL/CANCELLED/ERROR`)는 품질 판정과 별도다. 필수 BLOCKED/ERROR가 남으면 정상 검증 완료로 표시하지 않는다. 대표 배지 세부 집계는 구현 전 계약 테스트로 확정한다.
 
 검수 흐름:
 
@@ -239,7 +290,7 @@ Timeout은 일괄 FAIL이 아니다. 필수 화면의 준비 SLA가 명세에 �
 | TC-12 | pageerror·console·requestfailed 및 반복 이벤트 | 유형·출처·단계·횟수 구분; 누락 시 불완전 표시 | collector integration |
 | TC-13 | 양쪽 공지 제목·개수만 다름 | LIVE 데이터 비교 제외/정보; 구조 check 유지 | dual demo |
 | TC-14 | 마스킹 영역 안 버튼 잘림·행 겹침 | pixel mask와 별개 layout 계약 FAIL | visual/layout fixture |
-| TC-15 | region 스크린샷 없음/손상/크기 불일치 | ERROR 또는 선행 SKIP; PASS 금지 | comparator unit |
+| TC-15 | region 스크린샷 없음/손상/크기 불일치 | 증거 수집·처리 실패는 ERROR, 선행조건 미충족은 BLOCKED; PASS 금지 | comparator unit |
 | TC-16 | 각 환경 공지의 첫 표본→상세 | 각자 선택한 항목과 상세 연결 검증; A/B ID 동일성 주장 금지 | browser scenario |
 | TC-17 | 검색 빈값/키워드/Enter/버튼 | 승인 명세의 요청·상태; 정확한 집합은 fixture에서만 | scenario; `MVMH/frontend/src/containers/main/MainSearchContainer.js:54–177` |
 | TC-18 | N−1/N/N+1·한글·이모지·paste·공백 | 승인 길이 단위와 거절/절단/안내 계약; 미정이면 REVIEW | synthetic input fixture |
@@ -248,9 +299,9 @@ Timeout은 일괄 FAIL이 아니다. 필수 화면의 준비 SLA가 명세에 �
 | TC-21 | 팝업/modal/dialog/new-tab | 허용 이벤트·origin·닫기·부모 상태 확인 | synthetic scenario |
 | TC-22 | 승인 파일 다운로드/실패/대용량/외부host | 완료·MIME·size 검증 또는 정책 SKIP; 파일 실행 없음 | synthetic scenario |
 | TC-23 | 차이율 0/null/경계·상태복합 필터 | 조회만 변경, 판정 불변; null 별도; CSV 0 보존 | report/UI |
-| TC-24 | 실행기 예외/모든SKIP/FAIL+ERROR | 5상태 및 집계규칙 유지, 무실행 PASS 없음 | policy unit |
+| TC-24 | 실행기 예외/모든SKIP/필수BLOCKED/DIFF/FAIL+ERROR | 7상태 및 집계규칙 유지, 차이와 근거 부족 구분, 무실행 PASS 없음 | policy unit |
 | TC-25 | fixture 누락·API mock·실데이터 | 모드 표기, 누락 시 정밀비교 중단; mock을 DB 검증으로 표시 금지 | contract test |
-| TC-26 | 수동 로그인·ID 기억 해제·세션 만료 | PW 미저장; 사용자/환경별 분리; 만료 SKIP/재로그인 | auth local fixture |
+| TC-26 | 수동 로그인·ID 기억 해제·세션 만료 | PW 미저장; 사용자/환경별 분리; 만료 BLOCKED/재로그인 | auth local fixture |
 | TC-27 | 토큰/PII 포함 URL·console·스크린샷 | export 전 제거/차단, 로그인 캡처 제외 | security fixture |
 | TC-28 | restart 후 run/CSV/증거 조회 | manifest·정책·결과·연결 보존, 손상 artifact 명시 | persistence test |
 | TC-29 | 두 담당자 리뷰·같은 revision 변경 | 담당자 구분, 충돌 반환, 이력 손실 없음 | contract/integration |
@@ -291,7 +342,7 @@ Timeout은 일괄 FAIL이 아니다. 필수 화면의 준비 SLA가 명세에 �
 | page 발견 coverage | 등록된 기대 page 중 발견/기대 page | live 전체 page 분모가 없으면 coverage 수치 금지, 관측 수만 보고 |
 | 매칭률 | 승인 가능한 대응 pair 중 매칭 pair | live에서는 발견 범위 내 비율이라고 표시; 오매칭도 별도 검수 |
 | 행동 실행률 | 완료한 승인 행동/발견된 승인 행동 | 차단/미분류/미발견과 분리 |
-| assertion 실행률 | 실제 기대식 평가까지 끝난 assertion/계획된 assertion | PASS/FAIL의 평가 완료 check가 기본 분자. 관찰만 있는 REVIEW, 미평가 SKIP/ERROR는 분자 제외하고 별도 수를 표시 |
+| assertion 실행률 | 실제 기대식 평가까지 끝난 assertion/계획된 assertion | PASS/FAIL의 평가 완료 check가 기본 분자. 관찰만 있는 DIFF/REVIEW, 미평가 SKIP/BLOCKED/ERROR는 분자 제외하고 별도 수를 표시 |
 | 탐지 precision | TP/(TP+FP) | 자동 경고를 고정 정의, BUG_CONFIRMED/정답 라벨과 대조 |
 | false discovery 비율 | FP/(TP+FP) | 흔히 부르는 오탐 비율의 이 분모를 명시 |
 | FPR | FP/(FP+TN) | 정상 ground truth 모집단이 있을 때만 계산 |
@@ -300,4 +351,4 @@ Timeout은 일괄 FAIL이 아니다. 필수 화면의 준비 SLA가 명세에 �
 | flake 비율 | 동일 버전·fixture 반복에서 상태가 바뀐 check/반복 검사 check | 횟수·표본 수와 첫 실패를 보존 |
 | 수동 대비 시간 | 같은 범위의 준비+실행+검수+재검 실측 | 자동 실행 시간만 비교하지 않음 |
 
-분모 0은 0%가 아닌 N/A다. 미검수 REVIEW는 FP/TN로 강제 분류하지 않는다. 지표와 CI 성공 횟수는 실험 후에만 채운다. 이번에 실행한 기존 단위 테스트 5개는 위 브라우저·성능·오탐 실험을 대신하지 않는다.
+분모 0은 0%가 아닌 N/A다. 미검수 DIFF/REVIEW는 FP/TN로 강제 분류하지 않는다. 지표와 CI 성공 횟수는 실험 후에만 채운다. 이번에 실행한 기존 단위 테스트 5개는 위 브라우저·성능·오탐 실험을 대신하지 않는다.

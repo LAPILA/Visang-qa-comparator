@@ -11,3 +11,4 @@ local-settings/
 !.env.example
 *.log
 .playwright-cli/
+mia/
