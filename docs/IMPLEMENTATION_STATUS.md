@@ -55,6 +55,8 @@
 
 ## 3. 실제 코드의 경계와 다음 작업
 
+추가 요구사항으로 테스트 유형 4종, 결과 상태 7종, 오류 유형·중복 처리, 결과 화면 구성을 문서에 반영했다. 목표는 [REQUIREMENTS_AND_GAPS.md](REQUIREMENTS_AND_GAPS.md)의 8절과 [TEST_STRATEGY.md](TEST_STRATEGY.md)의 1·4·5·8절을 따른다. **이번 반영은 문서 변경이며 현재 코드는 PASS/FAIL/REVIEW/SKIP/ERROR 5상태다.** DIFF·BLOCKED, 오류 분류 전체, 단일 환경·회귀·조건 기반 검사의 정식 유형 지원, 새 화면 항목은 구현 완료로 세지 않는다.
+
 1. **실사이트 adapter**: 학교급별 ready/region/계정 역할·안전 조회 POST·SSO/CDN host를 담당 QA와 확인한 다음 등록한다. 현재 기본 프로필은 제품별 자동화 완성품이 아니다.
 2. **명세 기반 기능 추가**: 실제 검색·입력 N·back/refresh 기대값을 확정하고 합성 구현의 scenario hook을 확장한다. 안전한 다운로드/팝업도 별도 테스트 데이터로 추가한다.
 3. **UI 구조 검증 강화**: data mask 내부의 행 구조/overflow/겹침을 검사하고 region 위치·스타일 비교를 구현한다. 현재 마스킹이 이 전체 기능을 대신하지 않는다.
