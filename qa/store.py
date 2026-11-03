@@ -24,6 +24,16 @@ def redact_url(value):
         parts = urlsplit(value)
         if parts.scheme not in ('http', 'https'):
             return value
+        # Ordinary URLs are identities too: do not turn %20 into + or rewrite
+        # hash/query state merely because the report is being persisted.
+        queries = [parts.query]
+        if '?' in parts.fragment:
+            queries.append(parts.fragment.partition('?')[2])
+        elif '=' in parts.fragment:
+            queries.append(parts.fragment)
+        if not parts.username and not parts.password and not any(
+                SENSITIVE.search(key) for query in queries for key, _ in parse_qsl(query, keep_blank_values=True)):
+            return value
         host = parts.netloc.rsplit('@', 1)[-1]
         query = urlencode([(key, '[REDACTED]' if SENSITIVE.search(key) else val)
                            for key, val in parse_qsl(parts.query, keep_blank_values=True)])
@@ -56,6 +66,43 @@ def redact(value):
 
 class ReviewConflict(Exception):
     pass
+
+
+class RunDirectoryLease:
+    """One server owns a report directory; separate processes must use separate roots."""
+    def __init__(self, root):
+        root = Path(root).resolve()
+        root.mkdir(parents=True, exist_ok=True)
+        self.stream = (root / '.server.lock').open('a+b')
+        try:
+            self.stream.seek(0, os.SEEK_END)
+            if self.stream.tell() == 0:
+                self.stream.write(b'\0')
+                self.stream.flush()
+            self.stream.seek(0)
+            if os.name == 'nt':
+                import msvcrt
+                msvcrt.locking(self.stream.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            self.stream.close()
+            raise ValueError('이 결과 폴더를 다른 서버가 사용 중입니다. 기존 서버를 종료하거나 QA_RUNS_DIR을 분리하세요.') from exc
+
+    def close(self):
+        if self.stream.closed:
+            return
+        try:
+            self.stream.seek(0)
+            if os.name == 'nt':
+                import msvcrt
+                msvcrt.locking(self.stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.stream.fileno(), fcntl.LOCK_UN)
+        finally:
+            self.stream.close()
 
 
 class ReportStore:
@@ -93,9 +140,15 @@ class ReportStore:
             if not path.is_file():
                 return None
             try:
-                return json.loads(path.read_text(encoding='utf-8'))
+                job = json.loads(path.read_text(encoding='utf-8'))
             except (json.JSONDecodeError, UnicodeDecodeError) as exc:
                 raise ValueError('저장된 보고서가 손상되었습니다.') from exc
+            if not isinstance(job, dict):
+                raise ValueError('저장된 보고서가 JSON 객체가 아닙니다.')
+            major = str(job.get('schemaVersion', '1.0')).split('.')[0]
+            if major not in ('1', '2'):
+                raise ValueError(f'지원하지 않는 보고서 스키마입니다: {major}')
+            return job
 
     def list(self):
         jobs = []
@@ -108,7 +161,9 @@ class ReportStore:
                 if job:
                     jobs.append({key: job.get(key) for key in
                                  ('id', 'state', 'progress', 'operatorId', 'profileId', 'startedAt', 'finishedAt')}
-                                | {'totals': (job.get('report') or {}).get('totals')})
+                                | {'totals': (job.get('report') or {}).get('totals'),
+                                   'testType': (job.get('options') or {}).get('test_type', 'comparison'),
+                                   'schemaVersion': job.get('schemaVersion', '1.0')})
         return sorted(jobs, key=lambda item: item.get('startedAt') or '', reverse=True)
 
     def recover(self):
@@ -120,7 +175,7 @@ class ReportStore:
                            error='PROCESS_INTERRUPTED', finishedAt=timestamp(), authSide=None)
                 self.save(job)
 
-    def review(self, run_id, result_id, reviewer, status, reason, revision):
+    def review(self, run_id, result_id, reviewer, status, reason, revision, issue_ref=None):
         if status not in REVIEW_STATES:
             raise ValueError('검수 상태가 올바르지 않습니다.')
         if not isinstance(reviewer, str) or not reviewer.strip() or len(reviewer) > 50:
@@ -129,6 +184,15 @@ class ReportStore:
             raise ValueError('검수 사유를 입력하세요. (최대 2,000자)')
         if not isinstance(revision, int) or isinstance(revision, bool):
             raise ValueError('검수 버전이 필요합니다.')
+        if issue_ref is not None:
+            if not isinstance(issue_ref, str) or len(issue_ref) > 2000:
+                raise ValueError('이슈 참조는 최대 2,000자의 http(s) URL이어야 합니다.')
+            issue_ref = issue_ref.strip()
+            if issue_ref:
+                from qa.config import validate_url
+                issue_ref = validate_url(issue_ref)
+                if SENSITIVE.search(urlsplit(issue_ref).query) or SENSITIVE.search(urlsplit(issue_ref).fragment):
+                    raise ValueError('이슈 URL에 인증 파라미터를 넣을 수 없습니다.')
         with self.lock:
             job = self.get(run_id)
             if not job or not job.get('report'):
@@ -143,7 +207,13 @@ class ReportStore:
                 raise ReviewConflict('다른 검수 변경이 있습니다. 결과를 새로고침하고 다시 확인하세요.')
             event = {'reviewer': reviewer.strip(), 'reason': reason.strip(), 'status': status,
                      'previous': current['status'], 'revision': revision + 1, 'timestamp': timestamp()}
-            updated = {'status': status, 'revision': revision + 1, 'events': [*current['events'], event]}
+            issue_ref = current.get('issueRef', '') if issue_ref is None else issue_ref
+            event['issueRef'] = issue_ref
+            updated = {'status': status, 'revision': revision + 1, 'events': [*current['events'], event],
+                       'issueRef': issue_ref}
             row['review'] = updated
+            job['report'].setdefault('totals', {})['linkedIssues'] = len({
+                item.get('review', {}).get('issueRef') for item in job['report']['results']
+                if item.get('review', {}).get('issueRef')})
             self.save(job)
             return redact(updated)

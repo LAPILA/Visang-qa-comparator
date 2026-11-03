@@ -4,7 +4,21 @@ from __future__ import annotations
 import json
 import math
 import re
+import uuid
+from copy import deepcopy
 from urllib.parse import urlsplit
+
+from .environments import PRODUCT_ENVIRONMENTS
+
+TEST_TYPES = ('comparison', 'single', 'regression', 'conditional')
+CRAWL_SCOPES = ('approved_paths', 'same_origin_readonly')
+# Only static dependencies observed in the supplied templates/run are preapproved.
+# These hosts never become navigation, API, or manual-auth host permissions.
+PROFILE_RESOURCE_HOSTS = {
+    'elementary-pc': ['code.jquery.com'],
+    'elementary-mobile': ['code.jquery.com', 'developers.kakao.com', 'dapi.kakao.com', 'www.vivasam.com'],
+    'secondary-mobile': ['code.jquery.com'],
+}
 
 
 def validate_url(value):
@@ -80,33 +94,69 @@ def profiles(base_origin):
     demo['defaults'] = public_options(demo_options)
     demo.setdefault('label', '합성 데모 · 정상 차이와 결함')
     demo.setdefault('description', '외부 접속 없이 매칭·영역 비교·기능 시나리오를 확인합니다.')
+    demo.setdefault('environments', [])
+    demo.setdefault('baselineEnvironmentId', 'custom')
+    demo.setdefault('candidateEnvironmentId', 'custom')
     demo.pop('options', None)
     common = {'maxPages': 5, 'maxDepth': 2, 'maxActions': 5, 'timeoutSeconds': 180,
               'visualThreshold': 2, 'mode': 'combined', 'aliases': [], 'regions': [],
-              'safeActions': [], 'scenarioIds': [], 'allowedPaths': [], 'allowedHosts': []}
+              'safeActions': [], 'scenarioIds': [], 'allowedPaths': [], 'allowedHosts': [],
+              'testType': 'comparison', 'conditions': [], 'privateMaskSelectors': [],
+              'pairStartPages': True, 'resourceHosts': [], 'crawlScope': 'approved_paths',
+              'baselineName': 'A', 'candidateName': 'B'}
     demo['defaults'] = {**common, **demo['defaults']}
-    definitions = [
-        ('elementary-pc', '초등 PC', 'https://e.vivasam.com/main', 'https://stg-e.vivasam.com/main', False),
-        ('secondary-pc', '중고등 PC', 'https://v.vivasam.com/', 'https://stg-v.vivasam.com/main', False),
-        ('elementary-mobile', '초등 모바일', 'https://me.vivasam.com/#/', 'https://stg-me.vivasam.com/', False),
-        ('secondary-mobile', '중고등 모바일 · STG 주소 확인 필요', 'https://mv.vivasam.com/#/', '', True),
-    ]
+    definitions = [('elementary-pc', '초등 PC'), ('secondary-pc', '중고등 PC'),
+                   ('elementary-mobile', '초등 모바일'), ('secondary-mobile', '중고등 모바일')]
     result = [demo]
-    for key, label, baseline, candidate, disabled in definitions:
-        result.append({'id': key, 'label': label, 'baselineUrl': baseline, 'candidateUrl': candidate,
-                       'disabled': disabled, 'description': '실사이트 미검증 · 시작 페이지 외 이동은 경로 승인이 필요합니다.',
-                       'defaults': dict(common)})
+    for key, label in definitions:
+        environments = deepcopy(PRODUCT_ENVIRONMENTS[key])
+        by_id = {item['id']: item for item in environments}
+        result.append({'id': key, 'label': label,
+                       'baselineUrl': by_id['production']['url'], 'candidateUrl': by_id['staging']['url'],
+                       'baselineEnvironmentId': 'production', 'candidateEnvironmentId': 'staging',
+                       'environments': environments, 'disabled': False,
+                       'description': '사용자 등록 주소 · 제품과 A/B 환경을 선택하세요. 실제 접속·로그인 여부는 검사에서 확인합니다.',
+                       'defaults': {**deepcopy(common), 'resourceHosts': list(PROFILE_RESOURCE_HOSTS.get(key, [])),
+                                    'baselineName': by_id['production']['label'], 'candidateName': by_id['staging']['label']}})
     result.append({'id': 'custom', 'label': '직접 입력', 'baselineUrl': '', 'candidateUrl': '',
+                   'environments': [], 'baselineEnvironmentId': 'custom', 'candidateEnvironmentId': 'custom',
                    'description': '허용한 경로·버튼만 실행합니다. 기능 시나리오는 현재 합성 데모에서 지원합니다.',
                    'defaults': dict(common)})
     return result
+
+
+def _resolve_environment(data, profile, side):
+    entries = {item['id']: item for item in profile.get('environments', [])}
+    field = side + 'EnvironmentId'
+    requested = data.get(field)
+    if requested is not None and (not isinstance(requested, str) or (requested != 'custom' and requested not in entries)):
+        raise ValueError(f'{field}: 현재 제품에 등록된 환경 또는 custom을 선택하세요.')
+    raw_url = data.get(side + 'Url')
+    if requested in entries:
+        entry = entries[requested]
+        url = validate_url(raw_url or entry['url'])
+        if url != entry['url']:
+            raise ValueError(f'{field}: 등록 URL과 다릅니다. URL을 직접 바꾸려면 custom을 선택하세요.')
+        return url, requested, entry['label']
+    if requested == 'custom' and not raw_url:
+        raise ValueError(f'{side}Url: 직접 입력 URL이 필요합니다.')
+    url = validate_url(raw_url or profile[side + 'Url'])
+    match = next((item for item in entries.values() if item['url'] == url), None)
+    identifier = 'custom' if requested == 'custom' or not match else match['id']
+    label = match['label'] if match and identifier != 'custom' else ('A' if side == 'baseline' else 'B')
+    return url, identifier, label
 
 
 def public_options(options):
     names = {'route_aliases': 'aliases', 'safe_actions': 'safeActions', 'scenario_ids': 'scenarioIds',
              'allowed_paths': 'allowedPaths', 'allowed_hosts': 'allowedHosts', 'max_pages': 'maxPages',
              'max_depth': 'maxDepth', 'max_actions': 'maxActions', 'timeout_seconds': 'timeoutSeconds',
-             'visual_threshold': 'visualThreshold', 'manual_login': 'manualLogin'}
+             'visual_threshold': 'visualThreshold', 'manual_login': 'manualLogin',
+             'test_type': 'testType', 'previous_run_id': 'previousRunId',
+             'private_mask_selectors': 'privateMaskSelectors',
+             'pair_start_pages': 'pairStartPages', 'resource_hosts': 'resourceHosts',
+             'crawl_scope': 'crawlScope', 'baseline_name': 'baselineName', 'candidate_name': 'candidateName',
+             'baseline_environment_id': 'baselineEnvironmentId', 'candidate_environment_id': 'candidateEnvironmentId'}
     return {names.get(key, key): value for key, value in options.items()
             if key not in ('profile_id', 'operator_id', 'baseline_url', 'candidate_url')}
 
@@ -122,11 +172,43 @@ def parse_options(data, base_origin):
     if profile_id not in available or available[profile_id].get('disabled'):
         raise ValueError('사용 가능한 환경 프로필을 선택하세요.')
     profile = available[profile_id]
-    merged = {**profile['defaults'], **data}
-    baseline = validate_url(merged.get('baselineUrl') or profile['baselineUrl'])
-    candidate = validate_url(merged.get('candidateUrl') or profile['candidateUrl'])
-    if profile_id == 'synthetic-demo' and (baseline != profile['baselineUrl'] or candidate != profile['candidateUrl']):
+    merged = deepcopy({**profile['defaults'], **data})
+    test_type = merged.get('testType', 'comparison')
+    if test_type not in TEST_TYPES:
+        raise ValueError('테스트 목적은 comparison/single/regression/conditional 중 하나여야 합니다.')
+    crawl_scope = merged.get('crawlScope', 'approved_paths')
+    if crawl_scope not in CRAWL_SCOPES:
+        raise ValueError('탐색 범위는 approved_paths 또는 same_origin_readonly여야 합니다.')
+    try:
+        pair_start_pages = _boolean(merged.get('pairStartPages', test_type == 'comparison'))
+    except ValueError as exc:
+        raise ValueError('시작 페이지 비교 옵션은 true 또는 false여야 합니다.') from exc
+    pair_start_pages = pair_start_pages if test_type == 'comparison' else False
+    baseline, baseline_environment_id, baseline_label = _resolve_environment(data, profile, 'baseline')
+    if test_type == 'comparison':
+        candidate, candidate_environment_id, candidate_label = _resolve_environment(data, profile, 'candidate')
+    else:
+        candidate, candidate_environment_id, candidate_label = None, None, None
+    baseline_name = _text(data.get('baselineName', baseline_label), '환경 A 이름', 50)
+    candidate_name = _text(data.get('candidateName', candidate_label), '환경 B 이름', 50) if test_type == 'comparison' else None
+    if profile_id == 'synthetic-demo' and (baseline != profile['baselineUrl'] or
+            (test_type == 'comparison' and candidate != profile['candidateUrl'])):
         raise ValueError('합성 데모 URL은 변경할 수 없습니다. 다른 URL은 직접 입력 프로필을 사용하세요.')
+    previous_run_id = merged.get('previousRunId') or None
+    if test_type == 'regression':
+        try:
+            if str(uuid.UUID(previous_run_id)) != previous_run_id:
+                raise ValueError()
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise ValueError('회귀 비교할 과거 실행을 선택하세요.') from exc
+    else:
+        previous_run_id = None
+    from qa.conditions import validate_conditions
+    conditions = validate_conditions(merged.get('conditions', []))
+    if test_type == 'conditional' and not conditions:
+        raise ValueError('조건 기반 검사에는 최소 1개의 조건 계약이 필요합니다.')
+    private_masks = _array(merged.get('privateMaskSelectors', []), '민감 영역 마스크', 30)
+    private_masks = [_text(selector, '민감 영역 선택자', 500) for selector in private_masks]
     mode = merged.get('mode', 'combined')
     if mode not in ('combined', 'visual', 'discovery'):
         raise ValueError('검사 유형이 올바르지 않습니다.')
@@ -176,7 +258,20 @@ def parse_options(data, base_origin):
         except ValueError as exc:
             raise ValueError('허용 호스트의 포트가 올바르지 않습니다.') from exc
         allowed_hosts.add(host)
-    allowed_hosts.update(urlsplit(url).netloc.lower() for url in (baseline, candidate))
+    allowed_hosts.update(urlsplit(url).netloc.lower() for url in (baseline, candidate) if url)
+    resource_hosts = set()
+    for host in _lines(merged.get('resourceHosts', []), '정적 리소스 호스트'):
+        host = _text(host, '정적 리소스 호스트', 255).lower()
+        parsed = urlsplit('https://' + host)
+        if (parsed.netloc != host or parsed.path or parsed.query or parsed.fragment or
+                not parsed.hostname or parsed.username or parsed.password or '*' in host or
+                any(char.isspace() for char in host)):
+            raise ValueError('정적 리소스 호스트는 정확한 host[:port]만 입력하세요.')
+        try:
+            parsed.port
+        except ValueError as exc:
+            raise ValueError('정적 리소스 호스트의 포트가 올바르지 않습니다.') from exc
+        resource_hosts.add(host)
     paths = _lines(merged.get('allowedPaths', []), '허용 경로')
     for path in paths:
         _text(path, '허용 경로', 500)
@@ -188,6 +283,11 @@ def parse_options(data, base_origin):
     viewport = {'width': 390, 'height': 844} if 'mobile' in profile_id else {'width': 1365, 'height': 768}
     return {
         'baseline_url': baseline, 'candidate_url': candidate,
+        'baseline_environment_id': baseline_environment_id, 'candidate_environment_id': candidate_environment_id,
+        'baseline_name': baseline_name, 'candidate_name': candidate_name, 'crawl_scope': crawl_scope,
+        'test_type': test_type, 'previous_run_id': previous_run_id, 'conditions': conditions,
+        'pair_start_pages': pair_start_pages, 'resource_hosts': sorted(resource_hosts),
+        'private_mask_selectors': private_masks,
         'profile_id': profile_id, 'operator_id': _text(merged.get('operatorId', 'QA-A'), '담당자', 50),
         'mode': mode, 'max_pages': _number(merged, 'maxPages', 5, 1, 30, True),
         'max_depth': _number(merged, 'maxDepth', 2, 0, 4, True),

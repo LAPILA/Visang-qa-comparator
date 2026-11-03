@@ -1,71 +1,66 @@
-# 현재 구현 현황 — MVP 0.1.0
+# 현재 구현 현황 — v0.3.1
 
-기준일: 2026-10-30 (KST). 사용자의 후속 제작 요청으로 구현한 **첫 실행 가능한 버전**이다. 이전 다섯 문서는 Downloads의 OLD 코드를 감사한 기록과 목표 설계다. 이 문서와 [README](../README.md)가 현재 코드의 사용법·구현 범위를 설명한다. 커밋·푸시는 수행하지 않았다.
+기준일: 2026-11-03 KST. 기존 Python/Playwright/Pillow/순수 JS를 유지하며 동료 MD의 AR01~AR04와 환경별 탐색·기능 매핑을 확장했다. 공통 인터페이스는 [RESULT_CONTRACT](RESULT_CONTRACT.md), 사용 순서는 [ENVIRONMENT_DISCOVERY](ENVIRONMENT_DISCOVERY.md), 운영·검수는 [OPERATIONS](OPERATIONS.md)를 따른다. 원래 감사 문서와 [v0.1 기록](releases/0.1.0.md)은 과거 사실·장기 설계를 구분해서 읽는다.
 
-## 1. 구현한 것과 한계
+## 1. 구현 범위와 코드 근거
 
-| 항목 | 상태 | 실제 범위와 코드 근거 |
+| 기능 | 현재 구현·한계 | 실제 코드 |
 |---|---|---|
-| 실행 UI·프로필·단일 worker | 구현 | `app.py:67`, `qa/config.py:76`, `public/app.js:63`. loopback 서버, 환경별 context, 4제품 프로필 중 주소 미확정 STG는 비활성 |
-| URL hash·query 보존 | 구현 | `qa/matching.py:7–19`. hash route·반복 query 순서를 보존. `.do` 일괄 제거 없음 |
-| 명시적 매핑·후보 제안 | 부분 구현 | `qa/matching.py:22–40`. alias 충돌 REVIEW, heading/구조 후보 REVIEW. 화면 유사도 모델·별도 매핑 승인 UI는 없음. 고급 JSON에서 매핑 편집 |
-| 안전 발견·통제 실행 | 부분 구현 | `qa/engine.py:30`, `qa/policy.py:68–129`, `qa/engine.py:162`. 버튼/submit/role/onclick/링크 후보, 허용 host·route·selector, 위험 단어 우선 차단. iframe은 수만 기록하고 shadow/canvas 지원 안 함 |
-| 시간·페이지·행동 한도/취소 | 구현 | `qa/engine.py:86`, `qa/engine.py:437`, `app.py:103–120`. A/B 행동 예산 분배, 미실행 사유, 실행 시도/완료 구분. 개별 요청의 총수·서버 부하를 완벽히 제어하는 기능은 아님 |
-| HTTP/JS 관찰 | 부분 구현 | `qa/engine.py:125–192`, `qa/policy.py:131`. 출처/resource/method/status·정책 차단 구분. endpoint별 예상 401·API 계약·오류 지문 통합은 후속 |
-| 화면·영역 비교 | 구현/MVP 범위 | `qa/engine.py:195–269`, `qa/comparison.py:12`. viewport/region PNG, 마스크·비교 분모, 차이율/overlay. 이미지 오류가 PASS가 되지 않음 |
-| DOM/CSS 검사 | 부분 구현 | `qa/engine.py:195–269`. 필수 영역 존재/가시성 assertion, bounding box·일부 computed style 수집. 일반 겹침/잘림·CSS 속성 계약 비교는 미구현 |
-| 서버별 데이터 차이 | 부분 구현 | region의 `mask_selectors`로 동적 내용 제외, 존재·가시성 검사 병행. DB 원본 일치 검사 없음. 일반 목록 구조 계약·동적 영역 자동 탐지는 미구현 |
-| 기능 시나리오 | 부분 구현 | `qa/scenarios.py:52–178`. 합성 데모의 검색/길이/history 3개, A/B 독립 실행. live 시나리오·팝업/다운로드·IME 검증은 미구현 |
-| 수동 로그인 | 부분 구현 | `app.py:123–156`, `qa/engine.py:437`. headed 브라우저에서 사용자 직접 로그인, 메모리 세션만 사용. 자동 성공/권한 역할 판단과 장기 세션 재사용은 없음 |
-| ID 기억 | 구현/보조 기능 | `public/app.js:80–105`. opt-in localStorage 메모, 담당자/프로필/A·B 구분, 해제 시 삭제. 사이트 로그인 입력란에서 자동 추출·자동 채움하는 기능은 없음. PW는 입력받지 않음 |
-| 자동 5상태 | 구현 | `qa/policy.py:49–65`, `qa/comparison.py:62`, `qa/engine.py:500`. 자동 상태와 검수 상태 분리. 필수 영역 누락 FAIL, 수집/비교 실패 ERROR |
-| 필터·내보내기 | 구현 | `public/app.js:325–377`, `app.py:31–53`. 상태/영역/문자열/차이율/null, 독립 FAIL·ERROR 목록, CSV/JSON. standalone HTML export는 미구현 |
-| 결과 저장·검수 충돌 | 구현/단일 서버 범위 | `qa/store.py:61`, `app.py:67`. 원자적 JSON 교체, interrupted 복구, 검수 actor/reason/revision/history. 공유 폴더의 다중 프로세스 동시 쓰기·사용자 인증은 지원 안 함 |
-| 로컬 보호 조치 | 부분 구현 | `app.py:194–363`, `qa/store.py:22–54`, `qa/policy.py:17–46`. Host/Origin/nonce, JSON 제한, URL/로그 비밀 일부 제거, password/private selector 마스크. 모든 PII 자동 식별/공개 승인/암호화 저장소는 아님 |
-| CI | 파일 작성, 원격 실행 미확인 | `.github/workflows/qa.yml`. 합성 테스트만 실행하도록 구성. 푸시하지 않았으므로 GitHub Actions 성공 기록 없음 |
+| 네 제품·환경 분리 | 사용자 제공 4제품 × 4환경의 16주소 등록. A/B 환경 선택·URL 자동 입력·직접 입력·기존 설정 복원. 중고등 모바일 STG도 확인 주소 적용. | `qa/environments.py:1`, `qa/config.py:90`, `qa/config.py:164` |
+| 조회 링크 탐색 | 기본 승인 경로 유지. opt-in 동일 출처 안에서 위험 경로·계정·API·다운로드·변경 query 제외, 시간/페이지/깊이 한도. | `qa/policy.py:220`, `qa/engine.py:682` |
+| 페이지 특징·개인 영역 | 메뉴 경로·구조/heading·폼 이름/타입·버튼 수집. 입력값 미열람, private subtree/자손 텍스트 제외, selector 오류는 ERROR. | `qa/engine.py:141` |
+| 기능 매칭 후보 | alias/시작 쌍/정확 경로를 먼저 예약. 서로 유일한 메뉴·폼·구조 후보만 REVIEW. 모순·상세 ID 차이·중복은 강제 연결하지 않음. | `qa/matching.py:172` |
+| 목록·매핑 초안·내보내기 | 환경별 방문/보류·URL·근거, 수동 alias 초안, 페이지 CSV와 전체 JSON. 과거 결과/검수 변경·자동 실행 없음. | `qa/inventory.py:20`, `public/app.js:549`, `app.py:61` |
+| URL 보존 | query 순서·중복·percent encoding·hash 보존. 비밀 제거가 필요한 URL은 redact하고 자동 alias 비활성. | `qa/matching.py:55`, `qa/store.py:22` |
+| 4목적·7상태 | 환경 비교·단일·회귀·조건 UI와 PASS/FAIL/DIFF/SKIP/BLOCKED/ERROR/REVIEW. 단일 계열 B 방문 없음. | `qa/engine.py:871`, `qa/policy.py:84` |
+| 시각·DOM·데이터 | 영역 PNG·마스크·존재/가시성·차이율·분모. 전체 DB 동일성·자동 동적 영역 탐지·범용 겹침 탐지는 미지원. | `qa/engine.py:356`, `qa/comparison.py:12` |
+| 관찰·유형·중복 | HTTP/JS/네트워크·단계/출처/요청 ID·발생 수. 정책 영향 REVIEW와 실제 제품 오류를 구분. 모든 세부 수집기 구현을 뜻하지 않음. | `qa/engine.py:255`, `qa/findings.py:209` |
+| 조건·회귀 | 읽기 전용 조건과 전제 검사. 과거/현재의 규칙·범위·캡처 비교. 누락으로 해결 추정 금지, 과거 PNG 픽셀 회귀 미지원. | `qa/conditions.py:147`, `qa/regression.py:55` |
+| 저장·검수·재현 | 원자적 저장·복구·저장 실패 ERROR/메모리 보존·revision·이슈 이력·서버 폴더 잠금, 버전과 source/rule/scope hash. | `qa/store.py:108`, `app.py:80` |
+| 로그인·기능 시나리오 | 수동 로그인/메모리 세션·opt-in ID 메모. 합성 검색/길이/history. 자동 로그인·실사이트 팝업/다운로드 시나리오는 미지원. | `app.py:91`, `qa/scenarios.py:178` |
 
-구현 중 기존 Playwright 동기 흐름·BFS·listener·Pillow 비교·CSV 방식을 유지하면서 모듈로 나눴다. 회사 샘플 소스, 기존 runs, 실제 공지/교과자료, 계정·쿠키를 복사하지 않았다. 기존 잘못된 hash 삭제/PASS 기대값은 보존하지 않고 수정된 계약의 회귀 테스트로 대체했다.
+AR01 네 목적·AR02 7상태·AR03 분류/중복·AR04 결과 화면은 위 범위에서 구현했다. 실제 제품 기능을 명세 없이 PASS하지 않으며, 화면 유사도 AI·범용 CSS 레이아웃 검증·API 업무/스키마 계약 수집기가 전부 구현된 상태는 아니다. CI 파일은 있으나 이번 원격 CI 성공은 측정하지 않았다.
 
-## 2. 실제 검증 결과
+## 2. 실제 검증
 
-검증 환경: Windows, Python 3.14.10, Playwright 1.64.1, Pillow 12.3.0, 설치된 Playwright Chromium. 각 실제 run manifest에 브라우저 버전과 source SHA256을 저장한다.
+Windows / Python 3.14.10 / Playwright 1.64.1 / Pillow 12.3.0 / 설치된 Chromium. loopback 합성 사이트와 메모리 HTML만 사용했다.
 
-- 기존 단위/HTTP/브라우저/엔진 통합 **66개**: `python -B scripts/run_tests.py` 실행, 전부 통과, SKIP 없음.
-- 이후 추가한 실제 UI→worker→보고/검수/CSV/이력 테스트 **1개**: `python -B -m unittest discover -s tests -p test_ui_browser.py -v` 실행, 통과.
-- 합계 **67개의 서로 다른 테스트가 통과**했다. 기본 실행 명령은 새 UI 테스트도 자동 발견한다. 두 실행의 합계이며 하나의 실행 로그를 67개라고 바꾸어 쓰지 않는다.
-- `node --check public/app.js` 통과. UI 계약 검증에서는 합성 API 응답으로 5상태·수치/null 필터·ID 비전송·충돌 안내 등을 추가 확인했다. 이는 위 67개 unittest 개수에 포함하지 않는다.
-- 실제 엔진 테스트에서 A/B 합성 기능 assertion **각 15개, 총 30개 PASS**, 의도한 필수 Help 영역 누락 **FAIL 검출**, 저장/삭제 함정 호출 **0건**, 비교 ERROR **0건**을 확인했다. 실행된 브라우저 함수와 HTTP 상태의 범위에 한정된 결과다.
-- UI 테스트는 실제 앱에서 검사 시작, 필터, 검수 저장, CSV 다운로드, 새로고침 후 이력 열기를 수행했다. 모바일 가로 넘침과 UI pageerror도 확인했다.
+v0.3.1은 [16개 환경 등록표](ENVIRONMENT_URLS.md)를 기준으로 주소·환경 ID/이름·선택 URL을 구현했다. 최종 전체 테스트 **203개 통과, SKIP 0개**, `node --check public/app.js` 통과. 등록 테스트는 64개 A/B 조합과 모바일 hash/nohash, 등록 ID/URL 충돌, 선택 호스트만 승인, 기존 직접 입력·별칭·단일 환경 호환을 확인했다. UI는 4제품의 A/B 환경 선택과 과거 URL 복원·ID 메모 보존을 검증했다. 이는 실제 사이트 접속 테스트가 아니다.
 
-한 필수 버튼 결함이 여러 페이지/region 행에 반복 표시될 수 있다. `totals.pages`는 현재 **비교 결과 행 수**이고 방문 페이지 수는 `baselineVisited/candidateVisited`, 고유 결함 수는 아직 별도 집계하지 않는다. 결과 행 FAIL 개수를 독립 버그 검출 건수로 발표하지 않는다.
+아래 v0.3.0 기록은 이전 단계이며 v0.3.1의 전체 검증은 별도 로그 `output/validation-v0.3.1.log`로 구분한다.
 
-이번에 측정하지 않은 것: 실사이트 탐지율·오탐률·성능·수동 대비 시간 절감, 4제품 전체 기능 정상성, 실제 계정 로그인 성공·권한, CI 실행 성과.
+- 전체 단위·HTTP·Chromium 엔진/UI 회귀 **189개 통과, SKIP 0개**: `python -u -B scripts/run_tests.py`, 로그 `output/validation-v0.3.0.log`.
+- 이후 URL 저장 보존을 보완하고 저장·비밀 제거 회귀 **14개 통과**: 로그 `output/validation-v0.3-url-storage.log`. 앞의 13개와 중복이고 1개가 신규이므로 **총 190개의 서로 다른 테스트 통과**다. 단일 실행에서 190개를 실행했다고 표시하지 않는다.
+- `node --check public/app.js` 통과. 실제 UI→API→엔진 목록·CSV·이력·검수, 후보 초안·원본 보존, 모바일 가로 넘침·pageerror·외부 요청을 검증했다.
+- 탐색 fixture: 구형 hash route/새 경로를 각각 3페이지 방문, 같은 메뉴·폼 후보를 REVIEW로 제안, 삭제·계정·다운로드·API 함정 HTTP 호출 0건.
+- privacy fixture: 입력값 getter 미접근, private marker JSON/CSV 노출 0, 원본 DOM 불변, 잘못된 selector ERROR와 수집·캡처 중단.
+- 인코딩 fixture: `%20`·반복 query·hash를 목록/alias/저장에서 유지하고, 추천 alias를 다음 matcher에 넣어 EXPLICIT_ALIAS를 확인했다.
 
-### 검증 중 수정한 결함
+새 앱의 로컬 합성 이력 `DISCOVERY-0.3`을 저장했다. A/B 각각 방문 3·보류 2, 시작 쌍 1·미승인 기능 후보 2, CSV 다운로드와 저장/삭제 함정 0건을 확인했다. 결과는 Git 제외 폴더에만 있으며 새 clone에서 자동 생성되지 않는다.
 
-- null/크기 불일치/이미지 읽기 실패의 PASS 제거.
-- hash route 소실과 과도한 route 허용 방지.
-- 0% CSV 값 보존, A/B check ID와 region check ID의 집계 충돌 방지.
-- 시나리오를 모든 페이지에서 반복하지 않고 환경당 한 번 실행; A/B 행동 예산 확보.
-- Windows의 미소비 POST body 때문에 403 응답이 간헐적으로 연결 초기화되는 문제 수정. 제한된 body를 timeout 안에 읽고 거부하며, 해당 보안 테스트 5회 반복 확인.
-- 일반 token/OAuth fragment 비밀 제거 누락과 비밀 제거 시 정상 query/hash까지 잃는 문제 수정.
-- 검수 revision 경쟁에서 한 요청만 저장되고 나머지는 409가 되는지 확인.
+초기 실행에서 서로 다른 주기능 heading을 가진 fixture의 자동 연결 기대가 실패했다. 모순을 보수적으로 유지하고 실제 구형 모바일처럼 한쪽 h1이 없는 fixture로 구분해 재검증했다. 초기 로그는 `output/validation-v0.3-initial.log`에 보존했다.
 
-샌드박스에서 Chromium/localhost 통신이 막혀 로컬 테스트 실행만 승인된 외부 실행 환경에서 수행했다. 테스트 대상은 loopback 합성 서버였으며 운영/STG는 호출하지 않았다.
+이번에 재현·수정한 문제:
 
-## 3. 실제 코드의 경계와 다음 작업
+1. private 영역이 구조 특징/메뉴/내보내기에 남음 → 수집 전 제외, 입력값 미열람, selector 오류 시 중단.
+2. `op=reset`/`actionType=update`·중첩 인코딩 명령이 조회 탐색을 우회 → 제어 query 차단, 검색 내용/원래 URL 보존.
+3. 후보 내보내기·저장이 URL 인코딩을 바꿈 → 일반 identity 보존, 비밀 URL alias 비활성.
+4. 미확정 STG 때문에 중고등 모바일 전체 선택 불가 → 비교 B 직접 입력과 단일 운영 검사·모바일 viewport 지원.
 
-추가 요구사항으로 테스트 유형 4종, 결과 상태 7종, 오류 유형·중복 처리, 결과 화면 구성을 문서에 반영했다. 목표는 [REQUIREMENTS_AND_GAPS.md](REQUIREMENTS_AND_GAPS.md)의 8절과 [TEST_STRATEGY.md](TEST_STRATEGY.md)의 1·4·5·8절을 따른다. **이번 반영은 문서 변경이며 현재 코드는 PASS/FAIL/REVIEW/SKIP/ERROR 5상태다.** DIFF·BLOCKED, 오류 분류 전체, 단일 환경·회귀·조건 기반 검사의 정식 유형 지원, 새 화면 항목은 구현 완료로 세지 않는다.
+실제 운영/STG/DEV1/DEV2 전체 크롤링·로그인·탐지율·오탐률·속도·업무 시간 절감·공유 서버 부하·원격 CI 성과는 측정하지 않았다. 실제 환경은 확인된 URL·수동 로그인·승인된 검사 범위가 필요하다. GET도 무조건 안전하지 않으므로 확장 탐색은 알려진 위험을 보수적으로 배제하는 opt-in 방식이다.
 
-1. **실사이트 adapter**: 학교급별 ready/region/계정 역할·안전 조회 POST·SSO/CDN host를 담당 QA와 확인한 다음 등록한다. 현재 기본 프로필은 제품별 자동화 완성품이 아니다.
-2. **명세 기반 기능 추가**: 실제 검색·입력 N·back/refresh 기대값을 확정하고 합성 구현의 scenario hook을 확장한다. 안전한 다운로드/팝업도 별도 테스트 데이터로 추가한다.
-3. **UI 구조 검증 강화**: data mask 내부의 행 구조/overflow/겹침을 검사하고 region 위치·스타일 비교를 구현한다. 현재 마스킹이 이 전체 기능을 대신하지 않는다.
-4. **검수 품질·재현성**: 원시 이벤트의 단계 귀속, fingerprint 중복 제거, 정책 버전별 재평가, storage 실패·완전 중단 시 부분 증거 보존을 강화한다.
+## 3. 이전 단계 기록
 
-현재 모든 픽셀이 가려진 영역은 `NO_COMPARABLE_PIXELS/ERROR`로 표시한다. 설계 문서의 SKIP 제안과 달리 이 MVP는 비교 설정 오류로 취급한다. 어느 경우든 PASS로 표시하지 않는다. API 바깥쪽 필드 일부는 이전 UI와 호환되는 camelCase, check/설정 내부는 snake_case다. 외부 연동 전에 schema migration 계약을 확정한다.
+- v0.2.1: 전체 145개 통과, SKIP 0. `output/validation-v0.2.1.log`. `/#/`와 `/` 시작 쌍, 정적 CDN 권한 분리·정책 영향 JS/console·탐색 모드 안내를 보완했다.
+- v0.2.0: 전체 127개 통과, SKIP 0. `output/validation-v0.2.log`. 관찰 지문·종료 중 검수 이력·로그인 중단의 A 결과 보존·저장 실패 ERROR를 검증했다.
+- v0.1의 67개 기록은 별도 버전 기록이며 새 단계와 합산하지 않는다.
 
-## 4. 파일과 담당 경계
+## 4. 두 개발자의 다음 작업
 
-담당 A: `qa/engine.py`, `matching.py`, `comparison.py`, `policy.py`, `app.py` 실행 통합. 담당 B: `qa/scenarios.py`, 제품별 region/route 설정, `public/`, `qa/store.py`, 합성 데모/회귀 테스트. `qa/config.py`와 결과 JSON 계약은 공동 검토한다. 기존 [ROADMAP](ROADMAP.md)은 장기 목표이며 이번 구현을 모든 항목 완료로 처리하지 않는다.
+| 담당 | 현재 경계 | 다음 작업 |
+|---|---|---|
+| A: 사용자·핵심 엔진 | engine/policy/matching/inventory와 실행 통합 | 실사이트 준비·읽기 API 계약·중간 checkpoint·선택 재검 |
+| B: 협업자·시나리오/검수 | 실제 selector/매핑/TC, conditions/scenarios, public | 네 제품 환경 URL·역할·기대값 확인, 안전 동작·영역 검수와 시나리오 등록 |
+| 공동 | config/store/결과 계약·회귀·검증 기록 | 스키마·정책 변경, 개인정보·오탐/미탐 표본, 교차 검수 |
 
-사용자는 `run_windows.bat` 또는 README 명령으로 실행할 수 있다. 결과/임시파일/스크린샷은 `runs/`, `output/`에 있고 Git에서 제외된다. 이번 작업에서 생성한 로컬 데모는 실행 이력의 `MVP-DEMO` 담당자로 구분된다.
+worker는 서버당 하나이며 결과 폴더는 한 프로세스가 소유한다. 환경·담당자 이름은 자기 신고 정보다. 공용 서비스에는 사용자 인증/권한·접근 기록·공유 저장 transaction·증거 암호화/보존·백업 복구가 추가로 필요하다. 시스템 폰트 전체 fingerprint·대상 build ID/역할 자동 수집도 미지원이다. 현재 loopback 바인딩을 유지한다. 회사 소스·실데이터·계정은 복사하지 않았고 커밋·푸시는 사용자가 수행한다.

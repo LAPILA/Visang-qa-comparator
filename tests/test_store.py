@@ -6,7 +6,7 @@ import unittest
 import uuid
 from urllib.parse import parse_qsl, urlsplit
 
-from qa.store import ReportStore, ReviewConflict, redact
+from qa.store import ReportStore, ReviewConflict, RunDirectoryLease, redact
 
 
 _TMP_ROOT = Path(__file__).resolve().parents[1] / "output" / "tmp"
@@ -139,6 +139,17 @@ class ReportStoreTests(unittest.TestCase):
         oauth = urlsplit(redact("https://example.invalid/callback#access_token=fixture-secret&state=visible"))
         self.assertEqual(parse_qsl(oauth.fragment), [("access_token", "[REDACTED]"), ("state", "visible")])
 
+    def test_persisted_safe_urls_preserve_exact_encoding_for_next_mapping_run(self):
+        url = 'https://example.invalid/find?q=hello%20world&tag=b&tag=a#/search?label=REDACTED%20text'
+        self.assertEqual(redact(url), url)
+        job = self.job()
+        job['options'] = {'baseline_url': url}
+        job['report']['inventory'] = {'environments': [{'seedUrl': url, 'pages': [{'url': url}]}]}
+        self.store.save(job)
+        reopened = self.store.get(self.run_id)
+        self.assertEqual(reopened['options']['baseline_url'], url)
+        self.assertEqual(reopened['report']['inventory']['environments'][0]['pages'][0]['url'], url)
+
     def test_invalid_ids_corrupt_json_and_nonfinite_save_are_explicit_errors(self):
         for run_id in ("../outside", "", None, "row-1"):
             with self.subTest(run_id=run_id), self.assertRaises(ValueError):
@@ -154,6 +165,50 @@ class ReportStoreTests(unittest.TestCase):
         path.write_text("{broken", encoding="utf-8")
         with self.assertRaises(ValueError):
             self.store.get(self.run_id)
+
+    def test_issue_links_are_audited_with_review_revision_and_automatic_state_preserved(self):
+        self.store.save(self.job())
+        first = self.store.review(self.run_id, 'row-1', 'QA-A', 'BUG_CONFIRMED', 'Confirmed', 0,
+                                  'https://issues.example.invalid/QA-12')
+        self.assertEqual(first['issueRef'], 'https://issues.example.invalid/QA-12')
+        self.assertEqual(first['events'][0]['issueRef'], first['issueRef'])
+        self.assertEqual(self.store.get(self.run_id)['report']['totals']['linkedIssues'], 1)
+        second = self.store.review(self.run_id, 'row-1', 'QA-B', 'RETEST_REQUIRED', 'Retest', 1)
+        self.assertEqual(second['issueRef'], first['issueRef'])
+        with self.assertRaises(ReviewConflict):
+            self.store.review(self.run_id, 'row-1', 'QA-A', 'FALSE_POSITIVE', 'Stale', 1, '')
+        third = self.store.review(self.run_id, 'row-1', 'QA-B', 'VERIFIED_OK', 'Retested', 2, '')
+        self.assertEqual(third['issueRef'], '')
+        report = self.store.get(self.run_id)['report']
+        self.assertEqual(report['totals']['linkedIssues'], 0)
+        self.assertEqual(report['results'][0]['status'], 'FAIL')
+        for issue in ('javascript:alert(1)', 'https://user:pass@host.invalid/issue',
+                      'https://host.invalid/issue?token=secret', 42):
+            with self.subTest(issue=issue), self.assertRaises(ValueError):
+                self.store.review(self.run_id, 'row-1', 'QA', 'BUG_CONFIRMED', 'Reason', 3, issue)
+
+    def test_unknown_major_schema_is_rejected_without_rewriting_legacy_reports(self):
+        job = self.job()
+        job['schemaVersion'] = '1.0'
+        self.store.save(job)
+        self.assertEqual(self.store.get(self.run_id), job)
+        job['schemaVersion'] = '2.0'
+        self.store.save(job)
+        self.assertEqual(self.store.get(self.run_id), job)
+        job['schemaVersion'] = '999.0'
+        self.store.save(job)
+        with self.assertRaisesRegex(ValueError, '스키마'):
+            self.store.get(self.run_id)
+
+    def test_report_directory_has_one_server_owner_and_is_reusable_after_release(self):
+        lease = RunDirectoryLease(self.temp.name)
+        try:
+            with self.assertRaisesRegex(ValueError, '다른 서버'):
+                RunDirectoryLease(self.temp.name)
+        finally:
+            lease.close()
+        new_owner = RunDirectoryLease(self.temp.name)
+        new_owner.close()
 
 
 if __name__ == "__main__":

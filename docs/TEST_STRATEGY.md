@@ -2,7 +2,7 @@
 
 > 전체 목표 설계입니다. 후속 MVP의 구현·실행 검증·설계와의 차이는 [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)를 참고하세요.
 
-> 2026-10-30 추가 반영: 테스트 유형 4종, 목표 결과 상태 7종, 오류 유형·중복 처리, 결과 화면 구성. 현재 MVP의 5상태 구현과 구분한다. 추가 요구사항은 [REQUIREMENTS_AND_GAPS.md](REQUIREMENTS_AND_GAPS.md)의 8절을 따른다.
+> 2026-10-30 추가 반영: 테스트 유형 4종, 목표 결과 상태 7종, 오류 유형·중복 처리, 결과 화면 구성. **2026-11-03 v0.2에서 구현한 범위는 [IMPLEMENTATION_STATUS](IMPLEMENTATION_STATUS.md), 확정 인터페이스는 [RESULT_CONTRACT](RESULT_CONTRACT.md)를 따른다.** 아래 장기 설계 전체를 구현 완료로 간주하지 않는다. 5상태는 과거 v0.1 기록이다.
 
 작성일: 2026-10-30 (KST). **이 문서는 구현 제안이다.** 현재 구현·실행 검증은 [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md), 이전 코드 감사는 [AS_IS_ARCHITECTURE.md](AS_IS_ARCHITECTURE.md), 요구사항별 상태는 [REQUIREMENTS_AND_GAPS.md](REQUIREMENTS_AND_GAPS.md)를 따른다. 기존 Python 동기 Playwright·Pillow와 순수 JS UI를 우선 재사용한다.
 
@@ -137,7 +137,7 @@ viewport/DPR/브라우저 빌드/OS·폰트/locale/timezone/color scheme/인증 
 - CSS/layout: 승인 속성(font/size/spacing/color/display)과 element rect, overflow/clipping, 클릭 타깃 노출을 검사한다. 의도된 overlay·줄임표·가로 스크롤은 계약으로 구분한다. rect 교차만으로 전부 겹침 버그로 확정하지 않는다.
 - 스크린샷·이미지 처리 실패/크기 불일치는 해당 비교 check의 `ERROR`이며 0%·PASS로 치환하지 않는다. 유효한 adapter와 준비된 화면에서 명세상 필수 region/버튼이 없으면 **존재 assertion은 FAIL**이다. selector/adapter 자체의 오류는 ERROR, 인증·데이터 전제 미충족은 BLOCKED, 정책 제외는 SKIP으로 구분한다. 필수 영역이 없어 수행할 수 없는 후속 이미지 비교는 선행 실패를 연결하고 BLOCKED로 기록한다.
 
-원시 차이율 = 변경 픽셀 / 전체 비교 픽셀 × 100, 정책 적용 차이율 = 변경된 유효 픽셀 / 마스킹을 제외한 유효 픽셀 × 100. 비교 영역이 0이면 목표 설계에서는 `BLOCKED/NO_COMPARABLE_PIXELS`로 기록한다. 현재 MVP의 ERROR 처리와 구분하며 적용 전 계약을 확정한다. 알고리즘·픽셀 감도·region threshold·mask version을 저장한다. 기존 Pillow 처리(`OLD/app.py:234–257`)는 재사용하되 기존 회색조 변환/감도 25가 작은 색상 차이를 놓칠 수 있는지 합성 fixture로 검증하고 임계값을 조정한다.
+원시 차이율 = 변경 픽셀 / 전체 비교 픽셀 × 100, 정책 적용 차이율 = 변경된 유효 픽셀 / 마스킹을 제외한 유효 픽셀 × 100. 비교 영역이 0이면 `BLOCKED/NO_COMPARABLE_PIXELS`로 기록한다(v0.2 확정). 과거 v0.1은 ERROR였으며 기존 결과를 일괄 변경하지 않는다. 알고리즘·픽셀 감도·region threshold·mask version을 저장한다. 기존 Pillow 처리(`OLD/app.py:234–257`)는 재사용하되 기존 회색조 변환/감도 25가 작은 색상 차이를 놓칠 수 있는지 합성 fixture로 검증하고 임계값을 조정한다.
 
 **비교 가능한 증거에서 확인한 시각 차이 자체는 DIFF다.** 매칭·준비 조건·증거가 불명확하면 REVIEW다. 승인된 필수 요소 부재·버튼 잘림·명세 기반 위치 허용범위 위반만 해당 assertion FAIL이다. 화면이 비슷하면 동일 페이지의 후보가 될 수 있지만 기능이 다르면 매칭할 수 없다.
 
@@ -239,7 +239,7 @@ MVP는 Python의 등록된 함수/클래스로 시나리오를 구현한다. JSO
 
 ## 8. 자동 상태·심각도·QA 최종 검수
 
-목표 결과 상태는 다음 7종이다. 현재 MVP의 5상태 구현과 과거 저장 결과는 별도이며, 기존 REVIEW/SKIP을 근거 없이 DIFF/BLOCKED로 일괄 변경하지 않는다.
+결과 상태는 다음 7종이다(v0.2 구현). 과거 v0.1의 5상태 저장 결과는 별도이며, 기존 REVIEW/SKIP을 근거 없이 DIFF/BLOCKED로 일괄 변경하지 않는다.
 
 | 상태 | 판정 조건 | 예 |
 |---|---|---|

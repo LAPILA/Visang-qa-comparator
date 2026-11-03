@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 
 from qa import __version__
 from qa.config import parse_options, profiles, validate_url
-from qa.store import ReportStore, ReviewConflict, redact, timestamp
+from qa.store import ReportStore, ReviewConflict, RunDirectoryLease, redact, timestamp
 
 ROOT = Path(__file__).resolve().parent
 RUNS = Path(os.environ.get('QA_RUNS_DIR', str(ROOT / 'runs')))
@@ -39,7 +39,8 @@ def csv_report(job):
     output = io.StringIO(newline='')
     writer = csv.writer(output)
     writer.writerow(['실행 ID', '실행 담당자', '페이지', '영역', '자동 상태', '분류', '차이율(%)',
-                     '기준 URL', '비교 URL', '검수 상태', '검수 버전', '검증식 결과'])
+                     '기준 URL', '비교 URL', '검수 상태', '검수 버전', '검증식 결과',
+                     '테스트 목적', '오류 대분류', '세부 유형', '심각도', '고유 발견 ID', '회귀 구분', '연결 이슈'])
     for row in (job.get('report') or {}).get('results', []):
         writer.writerow([csv_safe(value) for value in (
             job['id'], job.get('operatorId'), row.get('key'), row.get('region_id'), row.get('status'),
@@ -49,7 +50,30 @@ def csv_report(job):
             (row.get('review') or {}).get('revision', 0),
             ' | '.join(f"{check.get('check_id')}: {check.get('status')} ({check.get('reason_code')})"
                        for check in row.get('checks', [])),
+            (job.get('options') or {}).get('test_type', 'comparison'),
+            ' | '.join(row.get('categories', [])), ' | '.join(row.get('subtypes', [])), row.get('severity'),
+            ' | '.join(row.get('findingIds', [])), (row.get('regression') or {}).get('classification', 'NOT_EVALUATED'),
+            (row.get('review') or {}).get('issueRef', ''),
         )])
+    return ('\ufeff' + output.getvalue()).encode('utf-8')
+
+
+def csv_inventory(job):
+    output = io.StringIO(newline='')
+    writer = csv.writer(output)
+    writer.writerow(['실행 ID', '제품', '환경', '환경 이름', '페이지 키', '요청 URL', '최종 URL',
+                     '제목', '메뉴 경로', '실제 방문', 'HTTP 상태', '발견 동작', '차단 동작', '미실행 사유'])
+    inventory = (job.get('report') or {}).get('inventory') or {}
+    for environment in inventory.get('environments', []):
+        for page in environment.get('pages', []):
+            writer.writerow([csv_safe(value) for value in (
+                job['id'], inventory.get('productId'), environment.get('id'), environment.get('name'),
+                page.get('pageKey'), page.get('url'), page.get('finalUrl'), page.get('title'),
+                ' > '.join(str(item.get('label', '')) if isinstance(item, dict) else str(item)
+                           for item in page.get('navigationTrail', [])),
+                page.get('visited'), page.get('statusCode'), page.get('actionCount'), page.get('blockedActionCount'),
+                ' | '.join(page.get('notExecutedReasons', [])),
+            )])
     return ('\ufeff' + output.getvalue()).encode('utf-8')
 
 
@@ -74,13 +98,21 @@ class JobService:
         self.cancel_events = {}
         self.auth_events = {}
         self.runner = runner
+        self.worker_thread = None
+        self.closing = False
 
     def start(self, options):
         with self.lock:
+            if self.closing:
+                raise ReviewConflict('서버가 종료 중입니다.')
             if self.active:
                 raise ReviewConflict('이미 검사가 진행 중입니다. 완료하거나 중지한 후 시작하세요.')
+            if options.get('test_type') == 'regression':
+                previous = self.store.get(options.get('previous_run_id'))
+                if not previous or not previous.get('report') or previous.get('state') not in ('done', 'cancelled', 'error'):
+                    raise ValueError('결과가 저장된 과거 실행을 선택하세요. 진행 중인 실행은 회귀 기준으로 사용할 수 없습니다.')
             run_id = str(uuid.uuid4())
-            job = {'id': run_id, 'schemaVersion': '1.0', 'state': 'running',
+            job = {'id': run_id, 'schemaVersion': '2.0', 'state': 'running',
                    'progress': '브라우저 실행 준비 중', 'operatorId': options['operator_id'],
                    'profileId': options['profile_id'], 'startedAt': timestamp(), 'finishedAt': None,
                    'report': None, 'error': None, 'authSide': None, 'options': options}
@@ -89,16 +121,43 @@ class JobService:
             self.cancel_events[run_id] = threading.Event()
             self.auth_events[run_id] = threading.Event()
             self.active = run_id
-            threading.Thread(target=self._worker, args=(job, options), daemon=True,
-                             name='qa-scan-' + run_id[:8]).start()
+            self.worker_thread = threading.Thread(target=self._worker, args=(job, options), daemon=True,
+                                                 name='qa-scan-' + run_id[:8])
+            self.worker_thread.start()
             return run_id
 
     def get(self, run_id):
         with self.lock:
-            if run_id == self.active:
+            if run_id in self.jobs:
                 # Copy before serializing so the HTTP thread sees a consistent snapshot.
                 return redact(json.loads(json.dumps(self.jobs[run_id])))
             return self.store.get(run_id)
+
+    def list(self):
+        saved = {item['id']: item for item in self.store.list()}
+        with self.lock:
+            for run_id, job in self.jobs.items():
+                saved[run_id] = {key: job.get(key) for key in
+                                ('id', 'state', 'progress', 'operatorId', 'profileId', 'startedAt', 'finishedAt')}
+                saved[run_id].update(testType=job['options'].get('test_type', 'comparison'),
+                                     totals=(job.get('report') or {}).get('totals'),
+                                     schemaVersion=job.get('schemaVersion'))
+        return sorted(saved.values(), key=lambda item: item.get('startedAt') or '', reverse=True)
+
+    def begin_close(self):
+        with self.lock:
+            self.closing = True
+            worker = self.worker_thread
+            if self.active:
+                self.cancel_events[self.active].set()
+                self.auth_events[self.active].set()
+        return worker
+
+    def close(self):
+        worker = self.begin_close()
+        if worker and worker is not threading.current_thread():
+            worker.join(timeout=30)
+        return worker
 
     def cancel(self, run_id):
         with self.lock:
@@ -120,7 +179,8 @@ class JobService:
         deadline = time.monotonic() + options['timeout_seconds']
 
         def cancelled():
-            return self.cancel_events[run_id].is_set() or time.monotonic() >= deadline
+            # Engine owns its time budget; user cancellation is a different cause.
+            return self.cancel_events[run_id].is_set()
 
         def progress(message):
             with self.lock:
@@ -136,11 +196,13 @@ class JobService:
                     job.update(state='awaiting_auth', authSide=side,
                                progress=f'{"기준 A" if side == "a" else "비교 B"} 브라우저에서 직접 로그인 후 계속을 누르세요.')
                     self.store.save(job)
-                while not self.auth_events[run_id].is_set() and not cancelled():
+                while not self.auth_events[run_id].is_set() and not cancelled() and time.monotonic() < deadline:
                     # Let Playwright dispatch manual navigation and route callbacks.
                     page.wait_for_timeout(150)
                 if cancelled():
-                    raise InterruptedError('로그인 대기가 취소되거나 실행 시간 한도에 도달했습니다.')
+                    raise InterruptedError('로그인 대기를 취소했습니다.')
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('AUTH_TIME_LIMIT_REACHED: 수동 로그인 대기 시간 한도에 도달했습니다.')
                 with self.lock:
                     job.update(state='running', authSide=None, progress='수동 로그인 이후 검사 준비 중')
                     self.store.save(job)
@@ -156,11 +218,29 @@ class JobService:
             report = runner(options, run_id, self.store.root, progress, cancelled,
                             auth_gate if options.get('manual_login') else None)
             report.setdefault('manifest', {}).update(runtime_manifest())
+            report['manifest'].setdefault('testType', options.get('test_type', 'comparison'))
+            # Preserve collected evidence if a later report/evaluation stage fails.
             with self.lock:
                 job['report'] = report
-                was_cancelled = cancelled() or report.get('cancelled', False)
+            from qa.report_validation import validate_report
+            validate_report(report)
+            from qa.findings import enrich_report
+            report = enrich_report(report)
+            if options.get('test_type') == 'regression':
+                from qa.regression import evaluate_regression
+                previous = self.store.get(options['previous_run_id'])
+                report['regression'] = evaluate_regression(previous['report'], report)
+                report['regression']['previousRunId'] = options['previous_run_id']
+                for row in report.get('results', []):
+                    evaluation = report['regression'].get('rows', {}).get(str(row['id']))
+                    if evaluation:
+                        row['regression'] = evaluation
+            with self.lock:
+                job['report'] = report
+                was_cancelled = cancelled() or report.get('cancelled', False) or report['manifest'].get('status') == 'CANCELLED'
                 job.update(state='cancelled' if was_cancelled else 'done', authSide=None,
-                           progress='중단된 범위와 완료 결과를 저장했습니다.' if was_cancelled else '검사 완료',
+                           progress='중단된 범위와 완료 결과를 저장했습니다.' if was_cancelled else
+                                    '검사 종료 · 차단·누락 범위를 확인하세요.' if report['manifest'].get('status') == 'PARTIAL' else '검사 완료',
                            finishedAt=timestamp())
         except InterruptedError as exc:
             with self.lock:
@@ -172,27 +252,63 @@ class JobService:
                            error=f'{type(exc).__name__}: {str(exc)[:1500]}', authSide=None, finishedAt=timestamp())
         finally:
             with self.lock:
+                saved = False
                 try:
                     self.store.save(job)
+                    saved = True
+                except (OSError, ValueError) as exc:
+                    job.update(state='error', progress='결과 저장에 실패했습니다. 이 서버를 종료하기 전에 JSON을 내려받으세요.',
+                               error=f'EVIDENCE_SAVE_FAILED: {str(exc)[:1000]}', finishedAt=timestamp(), authSide=None)
                 finally:
                     self.active = None
-                    self.jobs.pop(run_id, None)
+                    if saved:
+                        self.jobs.pop(run_id, None)
                     self.cancel_events.pop(run_id, None)
                     self.auth_events.pop(run_id, None)
 
 
 class Server(ThreadingHTTPServer):
-    daemon_threads = True
+    # A review handler may still be committing after serve_forever stops. Join it
+    # before releasing directory ownership so a new process cannot lose its write.
+    daemon_threads = False
+    block_on_close = True
 
     def __init__(self, address, runs_dir=RUNS, runner=None):
-        super().__init__(address, Handler)
-        self.service = JobService(runs_dir, runner)
+        self.lease = RunDirectoryLease(runs_dir)
+        try:
+            super().__init__(address, Handler)
+            self.service = JobService(runs_dir, runner)
+        except Exception:
+            self.lease.close()
+            if hasattr(self, 'socket'):
+                super().server_close()
+            raise
         self.session_token = secrets.token_urlsafe(32)
         self.base_origin = f'http://127.0.0.1:{self.server_address[1]}'
+
+    def server_close(self):
+        if hasattr(self, 'service'):
+            self.service.begin_close()
+        super().server_close()
+        if not hasattr(self, 'service'):
+            return
+        worker = self.service.close()
+        if worker and worker.is_alive():
+            # Keep the directory owned until an in-flight browser finishes cleanup.
+            def release_after_worker():
+                worker.join()
+                self.lease.close()
+            threading.Thread(target=release_after_worker, daemon=True).start()
+        else:
+            self.lease.close()
 
 
 class Handler(BaseHTTPRequestHandler):
     server: Server
+
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(10)
 
     def log_message(self, *_):
         # Request URLs and exception messages can contain private data.
@@ -276,10 +392,24 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/bootstrap':
                 # This token is deliberately returned only by a same-origin, no-CORS endpoint.
                 return self.json_response(200, {'profiles': profiles(self.server.base_origin),
-                                               'sessionToken': self.server.session_token, 'rememberedIds': {}},
+                                               'sessionToken': self.server.session_token, 'rememberedIds': {},
+                                               'schemaVersion': '2.0', 'testTypes': [
+                                                   {'id': 'comparison', 'label': '환경 비교 QA'},
+                                                   {'id': 'single', 'label': '단일 환경 QA'},
+                                                   {'id': 'regression', 'label': '회귀 테스트'},
+                                                   {'id': 'conditional', 'label': '조건 기반 UI QA'}]},
                                           redact_payload=False)
             if path == '/api/scans':
-                return self.json_response(200, {'scans': self.server.service.store.list()})
+                return self.json_response(200, {'scans': self.server.service.list()})
+            if path.startswith('/api/scans/') and path.endswith('/inventory.csv'):
+                run_id = path.removeprefix('/api/scans/').removesuffix('/inventory.csv')
+                job = self.server.service.get(run_id)
+                if not job or not job.get('report'):
+                    return self.json_response(404, {'error': '실행 결과를 찾을 수 없습니다.'})
+                if not job['report'].get('inventory'):
+                    return self.json_response(409, {'error': '이전 실행에는 환경별 페이지 목록이 없습니다. 새 탐색 실행이 필요합니다.'})
+                return self.send_bytes(200, csv_inventory(job), 'text/csv; charset=utf-8',
+                                       {'Content-Disposition': f'attachment; filename="qa-pages-{run_id}.csv"'})
             if path.startswith('/api/scans/'):
                 suffix = path.removeprefix('/api/scans/')
                 extension = '.csv' if suffix.endswith('.csv') else '.json' if suffix.endswith('.json') else ''
@@ -336,6 +466,8 @@ class Handler(BaseHTTPRequestHandler):
                 if handle_demo(self, path):
                     return
             data = self._parse_body()
+            if self.server.service.closing:
+                return self.json_response(503, {'error': '서버가 종료 중입니다. 새 서버에서 다시 시도하세요.'})
             if path == '/api/scans':
                 options = parse_options(data, self.server.base_origin)
                 run_id = self.server.service.start(options)
@@ -351,7 +483,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.json_response(200, {'ok': True})
                 if action == 'reviews':
                     review = self.server.service.store.review(run_id, data.get('resultId'),
-                        data.get('reviewer'), data.get('status'), data.get('reason'), data.get('expectedRevision'))
+                        data.get('reviewer'), data.get('status'), data.get('reason'), data.get('expectedRevision'),
+                        data.get('issueRef'))
                     return self.json_response(200, {'review': review})
             return self.json_response(404, {'error': '찾을 수 없는 경로입니다.'})
         except PermissionError as exc:

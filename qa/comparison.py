@@ -59,12 +59,14 @@ def image_diff(left, right, artifact_root, run_id, key):
                 'note': 'Image comparison failed: ' + type(exc).__name__, 'error': 'IMAGE_COMPARE_ERROR'}
 
 
-def visual_check(visual, threshold, check_id='visual', required=True):
+def visual_check(visual, threshold, check_id='visual', required=True, *, comparable=True,
+                 uncertainty_reason='COMPARISON_CONDITIONS_UNCONFIRMED'):
     if not visual or visual.get('differencePercent') is None:
-        return check(check_id, 'ERROR', (visual or {}).get('error', 'COMPARISON_UNAVAILABLE'),
+        reason = (visual or {}).get('error', 'COMPARISON_UNAVAILABLE')
+        return check(check_id, 'BLOCKED' if reason == 'NO_COMPARABLE_PIXELS' else 'ERROR', reason,
                      expected='Comparable image evidence', actual=(visual or {}).get('note'), required=required)
     percent = visual['differencePercent']
-    return check(check_id, 'REVIEW' if percent >= threshold else 'PASS',
-                 'VISUAL_DIFFERENCE' if percent >= threshold else 'WITHIN_VISUAL_THRESHOLD',
+    return check(check_id, 'REVIEW' if not comparable else 'DIFF' if percent >= threshold else 'PASS',
+                 uncertainty_reason if not comparable else 'VISUAL_DIFFERENCE' if percent >= threshold else 'WITHIN_VISUAL_THRESHOLD',
                  expected={'differencePercentBelow': threshold}, actual={'differencePercent': percent},
                  evidence=[visual['url']] if visual.get('url') else [], required=required)

@@ -5,13 +5,39 @@ import fnmatch
 import re
 from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
-STATUSES = frozenset({'PASS', 'FAIL', 'REVIEW', 'SKIP', 'ERROR'})
+STATUSES = frozenset({'PASS', 'FAIL', 'DIFF', 'SKIP', 'BLOCKED', 'ERROR', 'REVIEW'})
 _SENSITIVE = re.compile(r'password|passwd|token|secret|authorization|session|cookie|credential|api.?key', re.I)
 _DANGEROUS = re.compile(
     r'(?i)(logout|log-out|signout|sign-out|delete|remove|withdraw|unsubscribe|'
     r'purchase|checkout|payment|subscribe|register|save|submit|send|upload|'
     r'삭제|탈퇴|결제|구매|신청|등록|저장|전송|발송|로그아웃|수정|업로드)')
 _DOWNLOAD = re.compile(r'(?i)(download|다운로드|\.(?:pdf|zip|xlsx?|docx?|pptx?|hwp|exe|msi)(?:$|[?#]))')
+# Expanded discovery never treats account management or data/file endpoints as
+# general page navigation. Explicit-path mode retains its existing policy.
+_PRIVATE_ROUTE = re.compile(
+    r'(?i)(?:^|[/._\s-])(?:auth|oauth|sso|login|log-in|signin|sign-in|signup|sign-up|account|member|membership|'
+    r'mypage|my-page|my-info|profile|privacy|personal|password|passwd|credential|admin|settings|preferences)'
+    r'(?:$|[/._\s-])|회원정보|개인정보|계정설정|마이페이지|비밀번호|로그인|회원가입')
+_WRITE_ROUTE = re.compile(
+    r'(?i)(?:^|[/._\s-])(?:edit|update|modify|create|write|insert|add|clear|reset|confirm|'
+    r'approve|reject|accept|agree|enroll|apply|reserve|cancel|cart|order|toggle|enable|disable|'
+    r'activate|deactivate|archive|destroy|set|lock|unlock)(?:$|[/._\s-])')
+_NON_PAGE_FILE = re.compile(
+    r'(?i)\.(?:json|xml|csv|tsv|ya?ml|pdf|zip|rar|7z|tar|gz|bz2|xz|xlsx?|docx?|pptx?|hwp|'
+    r'exe|msi|dmg|apk|iso|bin|mp[34]|wav|ogg|webm|avi|mov|jpe?g|png|gif|webp|svg|ico|'
+    r'woff2?|ttf|eot|css|js|map)(?:$|[?#/])')
+_API_ROUTE = re.compile(r'(?i)(?:^|/)(?:api|graphql|rest)(?:$|[/._-])')
+_READ_ACTIONS = frozenset({'list', 'view', 'read', 'search', 'detail', 'get', 'index', 'select'})
+_CONTROL_QUERY_KEYS = frozenset({
+    'action', 'act', 'op', 'operation', 'cmd', 'command', 'method', 'mode', 'do',
+    'actiontype', 'actionname', 'operationtype', 'operationname', 'commandtype', 'commandname',
+    'methodtype', 'methodname', 'event', 'eventtype', 'eventname', 'task', 'tasktype', 'taskname',
+    'function', 'functionname', 'fn', 'dispatch', 'handler',
+})
+_CONTENT_QUERY_KEYS = frozenset({'q', 'query', 'search', 'keyword', 'keywords', 'term', 'text',
+                                'title', 'description', 'message', 'content'})
+_TARGET_QUERY_KEYS = frozenset({'url', 'uri', 'redirect', 'redirecturl', 'redirecturi', 'returnurl',
+                               'returnuri', 'returnto', 'next', 'target', 'destination', 'continue', 'callback'})
 
 
 def sanitize_url(value):
@@ -57,12 +83,28 @@ def check(check_id, status, reason_code, expected=None, actual=None, *,
 
 def aggregate_status(checks):
     statuses = [c.get('status', 'ERROR') for c in checks]
-    for status in ('FAIL', 'ERROR', 'REVIEW'):
+    for status in ('FAIL', 'ERROR'):
+        if status in statuses:
+            return status
+    if any(c.get('status') == 'BLOCKED' and c.get('required', True) for c in checks):
+        return 'BLOCKED'
+    for status in ('REVIEW', 'DIFF'):
         if status in statuses:
             return status
     if any(c.get('status') == 'SKIP' and c.get('required', True) for c in checks):
         return 'SKIP'
     return 'PASS' if 'PASS' in statuses else 'SKIP'
+
+
+def unexecuted_status(reason):
+    """A budget/prerequisite prevents execution; a policy intentionally excludes it."""
+    reason = str(reason or '')
+    if (reason == 'CANCELLED' or 'LIMIT' in reason or 'PREREQUISITE' in reason
+            or reason in {'MANUAL_AUTH_REQUIRED', 'LOGIN_REQUIRED', 'SESSION_EXPIRED',
+                          'ROLE_UNAVAILABLE', 'INSUFFICIENT_DATA', 'NO_COMPARABLE_PIXELS',
+                          'MATCH_SIDE_UNAVAILABLE', 'PAGE_NOT_READY', 'PREVIOUS_STATE_RESET_FAILED'}):
+        return 'BLOCKED'
+    return 'SKIP'
 
 
 def dangerous_action(action):
@@ -88,13 +130,148 @@ def host_allowed(url, allowed_hosts):
         return False
 
 
-def route_allowed(url, options, seed_urls=()):
+def resource_allowed(url, resource_type, method, navigation, hosts):
+    """Grant only passive resource loads; this is not a navigation/API allowlist.
+
+    Host-only entries permit default HTTP(S) ports. Other ports need an explicit
+    host:port entry. A redirect is checked again using its own request URL/type.
+    """
+    if navigation or resource_type not in ('script', 'stylesheet', 'image', 'font', 'media'):
+        return False
+    if method not in ('GET', 'HEAD'):
+        return False
+    try:
+        parts = urlsplit(url)
+        if parts.scheme not in ('http', 'https') or not parts.hostname or parts.username or parts.password:
+            return False
+        default_port = 443 if parts.scheme == 'https' else 80
+        requested_port = parts.port if parts.port is not None else default_port
+        for host in hosts:
+            if not isinstance(host, str) or '*' in host or any(char.isspace() for char in host):
+                continue
+            approved = urlsplit('https://' + host.lower())
+            if (approved.path or approved.query or approved.fragment or approved.username or approved.password
+                    or not approved.hostname or approved.netloc != host.lower()):
+                continue
+            if parts.hostname.lower().rstrip('.') != approved.hostname.lower().rstrip('.'):
+                continue
+            if requested_port == (approved.port if approved.port is not None else default_port):
+                return True
+    except (ValueError, TypeError):
+        return False
+    return False
+
+
+def _origin_identity(url):
+    try:
+        parts = urlsplit(url)
+        if (parts.scheme not in ('http', 'https') or not parts.hostname or parts.username or parts.password
+                or any(char.isspace() for char in url) or '\\' in url):
+            return None
+        return parts.scheme.lower(), parts.hostname.lower(), parts.port if parts.port is not None else (443 if parts.scheme == 'https' else 80)
+    except (ValueError, TypeError):
+        return None
+
+
+def _decode_query_policy(value):
+    for _ in range(4):
+        decoded = unquote(value)
+        if decoded == value:
+            return value
+        value = decoded
+    if unquote(value) != value:
+        raise ValueError('Query encoding depth is not approved.')
+    return value
+
+
+def _readonly_query_reason(query, depth=0):
+    if depth > 4:
+        return 'NESTED_QUERY_NOT_APPROVED'
+    try:
+        for raw_key, raw_value in parse_qsl(query, keep_blank_values=True):
+            key = _decode_query_policy(raw_key)
+            normalized_key = re.sub(r'[^a-z0-9]', '', key.lower())
+            if normalized_key in _CONTENT_QUERY_KEYS:
+                # A search for "reset" is not an instruction to reset anything.
+                continue
+            value = _decode_query_policy(raw_value)
+            if normalized_key in _CONTROL_QUERY_KEYS and value.strip().lower() not in _READ_ACTIONS:
+                return 'UNKNOWN_ACTION_ENDPOINT'
+            readable_key = re.sub(r'([a-z])([A-Z])', r'\1-\2', key)
+            if _PRIVATE_ROUTE.search(readable_key) or _WRITE_ROUTE.search(readable_key):
+                return 'MUTATING_OR_PRIVATE_QUERY_NOT_APPROVED'
+            parts = urlsplit(value)
+            if normalized_key in _TARGET_QUERY_KEYS:
+                readable_path = re.sub(r'([a-z])([A-Z])', r'\1-\2', parts.path + '/' + parts.fragment.split('?', 1)[0])
+                if dangerous_action({'url': value}) or _PRIVATE_ROUTE.search(readable_path) or _WRITE_ROUTE.search(readable_path):
+                    return 'MUTATING_OR_PRIVATE_QUERY_NOT_APPROVED'
+            nested_queries = [item for item in (parts.query, parts.fragment.partition('?')[2]) if item]
+            if not nested_queries and '=' in value:
+                nested_queries = [value]
+            for nested in nested_queries:
+                denied = _readonly_query_reason(nested, depth + 1)
+                if denied:
+                    return denied
+    except (ValueError, TypeError):
+        return 'ENCODED_QUERY_NOT_APPROVED'
+    return None
+
+
+def readonly_navigation_reason(action):
+    """Return a conservative exclusion reason, not proof that a GET is safe."""
+    denied = dangerous_action(action)
+    if denied:
+        return denied
+    url = action.get('href') or action.get('url') or ''
+    if not _origin_identity(url):
+        return 'INVALID_NAVIGATION_URL'
+    denied = dangerous_action({**action, 'href': unquote(unquote(url))})
+    if denied:
+        return denied
+    if action.get('formAction') or action.get('tag', 'a').lower() not in ('a', 'area'):
+        return 'NAVIGATION_LINK_REQUIRED'
+    if action.get('method', 'GET').upper() not in ('GET', 'HEAD'):
+        return 'WRITE_REQUEST_NOT_APPROVED'
+    parts = urlsplit(url)
+    # Decode for policy inspection only: the queued URL retains its exact state.
+    path = unquote(unquote((parts.path or '/') + '/' + parts.fragment.split('?', 1)[0]))
+    readable_path = re.sub(r'([a-z])([A-Z])', r'\1-\2', path)
+    label = ' '.join(str(action.get(key) or '') for key in ('label', 'name'))
+    if _PRIVATE_ROUTE.search(readable_path + ' ' + label):
+        return 'ACCOUNT_OR_PRIVATE_ROUTE_NOT_APPROVED'
+    if _WRITE_ROUTE.search(readable_path + ' ' + label):
+        return 'MUTATING_ROUTE_NOT_APPROVED'
+    if _NON_PAGE_FILE.search(unquote(unquote(url))):
+        return 'NON_PAGE_RESOURCE_NOT_APPROVED'
+    if _API_ROUTE.search(readable_path):
+        return 'API_NAVIGATION_NOT_APPROVED'
+    queries = [parts.query, parts.fragment.partition('?')[2]]
+    for query in queries:
+        denied = _readonly_query_reason(query)
+        if denied:
+            return denied
+    return None
+
+
+def _selected_origin(seed_urls, origin_url):
+    origins = {_origin_identity(seed) for seed in seed_urls} - {None}
+    if origin_url:
+        selected = _origin_identity(origin_url)
+        return selected if selected in origins else None
+    return next(iter(origins)) if len(origins) == 1 else None
+
+
+def route_allowed(url, options, seed_urls=(), *, origin_url=None):
     def route_identity(value):
         parts = urlsplit(value)
         # /#/a and /#/b share a document path, but are different application routes.
         return (parts.path or '/') + ('#' + parts.fragment.split('?', 1)[0] if parts.fragment else '')
 
     try:
+        if options.get('crawl_scope', 'approved_paths') == 'same_origin_readonly':
+            origin = _selected_origin(seed_urls, origin_url or options.get('_environment_seed'))
+            return bool(origin and _origin_identity(url) == origin and
+                        not readonly_navigation_reason({'url': url}))
         identity = route_identity(url)
         paths = {route_identity(seed) for seed in seed_urls}
         for alias in options.get('route_aliases', []):
@@ -106,7 +283,7 @@ def route_allowed(url, options, seed_urls=()):
         return False
 
 
-def classify_candidate(action, options, seed_urls=()):
+def classify_candidate(action, options, seed_urls=(), *, origin_url=None):
     """Discovery is broad; execution requires an independent policy decision."""
     denied = dangerous_action(action)
     if denied:
@@ -117,7 +294,15 @@ def classify_candidate(action, options, seed_urls=()):
     if href:
         if not host_allowed(href, options.get('allowed_hosts', [])):
             return False, 'HOST_NOT_APPROVED'
-        if not route_allowed(href, options, seed_urls):
+        selected_origin_url = origin_url or options.get('_environment_seed') or action.get('pageUrl')
+        if options.get('crawl_scope', 'approved_paths') == 'same_origin_readonly':
+            denied = readonly_navigation_reason(action)
+            if denied:
+                return False, denied
+            origin = _selected_origin(seed_urls, selected_origin_url)
+            if not origin or _origin_identity(href) != origin:
+                return False, 'ORIGIN_NOT_APPROVED'
+        if not route_allowed(href, options, seed_urls, origin_url=selected_origin_url):
             return False, 'ROUTE_NOT_APPROVED'
         return True, 'APPROVED_NAVIGATION'
     for rule in options.get('safe_actions', []):
@@ -132,6 +317,8 @@ def http_observation(status, resource_type, same_origin):
     """No blanket 400 suppression; optional/API errors remain reviewable evidence."""
     if status < 400:
         return None
+    if same_origin and resource_type == 'document' and status in (401, 403):
+        return dict(category='LOGIN_REQUIRED' if status == 401 else 'ACCESS_DENIED', level='BLOCKED')
     critical = same_origin and resource_type in ('document', 'script', 'stylesheet')
     return dict(category='HTTP_5XX' if status >= 500 else 'HTTP_4XX',
-                level='FAIL' if critical else 'REVIEW')
+                level='FAIL' if critical and status not in (400, 401, 403) else 'REVIEW')

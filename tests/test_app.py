@@ -8,8 +8,10 @@ import threading
 import time
 import unittest
 import uuid
+from unittest.mock import patch
 
 from app import Server, csv_report, csv_safe
+from qa.store import ReviewConflict
 
 
 _TMP_ROOT = Path(__file__).resolve().parents[1] / "output" / "tmp"
@@ -64,6 +66,8 @@ class LocalHTTPAppTests(unittest.TestCase):
             elif self.mode == "error":
                 raise RuntimeError("Synthetic runner error")
             report = _report()
+            if self.mode == 'invalid-report':
+                report['results'][0]['status'] = 'SUCCESS'
             report["cancelled"] = cancelled()
             return report
 
@@ -142,7 +146,7 @@ class LocalHTTPAppTests(unittest.TestCase):
                     b'{"profileId":"synthetic-demo","maxPages":1e309}'):
             with self.subTest(raw=raw):
                 self.assertEqual(self.request("POST", "/api/scans", raw=raw)[0], 400)
-        for body in ({"profileId": "secondary-mobile"},
+        for body in ({"profileId": "secondary-mobile", "candidateEnvironmentId": "unknown-environment"},
                      {"profileId": "synthetic-demo", "baselineUrl": "https://outside.invalid/"},
                      {"profileId": "synthetic-demo", "password": "synthetic-password"}):
             with self.subTest(body=body):
@@ -161,6 +165,37 @@ class LocalHTTPAppTests(unittest.TestCase):
         status, listed, _ = self.request("GET", "/api/scans")
         self.assertEqual(status, 200)
         self.assertEqual(listed["scans"][0]["operatorId"], "QA-A")
+
+    def test_registered_environment_ids_resolve_and_persist_before_fake_runner(self):
+        status, created, _ = self.request('POST', '/api/scans', {
+            'profileId': 'elementary-mobile', 'operatorId': 'QA-registry',
+            'baselineEnvironmentId': 'legacy-dev', 'candidateEnvironmentId': 'vibe-dev'})
+        self.assertEqual(status, 202)
+        job = self.await_state(created['id'], {'done', 'error'})
+        self.assertEqual(job['state'], 'done', job.get('error'))
+        self.assertEqual(job['options']['baseline_url'], 'https://me-dev.vivasam.com/#/')
+        self.assertEqual(job['options']['candidate_url'], 'https://dev2-me.vivasam.com/')
+        self.assertEqual(job['options']['baseline_environment_id'], 'legacy-dev')
+        self.assertEqual(job['options']['candidate_environment_id'], 'vibe-dev')
+        self.assertEqual(job['options']['baseline_name'], '레거시 개발')
+        self.assertEqual(job['options']['candidate_name'], '바이브 개발')
+        self.assertEqual(job['options']['allowed_hosts'], ['dev2-me.vivasam.com', 'me-dev.vivasam.com'])
+
+    def test_inventory_csv_route_requires_inventory_and_exports_environment_names(self):
+        _, created, _ = self.start()
+        self.await_state(created['id'], {'done', 'error'})
+        path = f"/api/scans/{created['id']}/inventory.csv"
+        self.assertEqual(self.request('GET', path)[0], 409)
+        job = self.server.service.store.get(created['id'])
+        job['report']['inventory'] = {'productId': 'custom', 'environments': [
+            {'id': 'a', 'name': 'DEV2', 'pages': [{'pageKey': '/notice', 'url': 'https://a.test/notice',
+                'title': 'Notice', 'visited': True, 'statusCode': 200, 'actionCount': 0, 'blockedActionCount': 0}]}]}
+        self.server.service.store.save(job)
+        status, payload, headers = self.request('GET', path)
+        self.assertEqual(status, 200)
+        self.assertIn('DEV2', payload.decode('utf-8-sig'))
+        self.assertIn('attachment', headers['Content-Disposition'])
+        self.assertIn(self.request('GET', '/api/scans/../outside/inventory.csv')[0], (400, 404))
 
     def test_single_active_run_conflict_cancel_and_next_run(self):
         self.mode = "wait-cancel"
@@ -228,6 +263,128 @@ class LocalHTTPAppTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertIn(self.request("GET", path)[0], (400, 404))
         self.assertEqual(self.request("GET", f"/artifacts/{run_id}/a/missing.png")[0], 404)
+
+    def test_missing_or_running_regression_reference_is_rejected_before_runner_start(self):
+        status, _, _ = self.start(testType='regression', previousRunId=str(uuid.uuid4()))
+        self.assertEqual(status, 400)
+        self.assertFalse(self.runner_started.is_set())
+        self.mode = 'wait-cancel'
+        _, first, _ = self.start(testType='single')
+        self.assertTrue(self.runner_started.wait(1))
+        self.assertEqual(self.start(testType='regression', previousRunId=first['id'])[0], 409)
+
+    def test_regression_preserves_past_report_and_attaches_comparability_evaluation(self):
+        _, first, _ = self.start(testType='single')
+        self.await_state(first['id'], {'done', 'error'})
+        before = (Path(self.temp.name) / first['id'] / 'report.json').read_bytes()
+        status, second, _ = self.start(testType='regression', previousRunId=first['id'])
+        self.assertEqual(status, 202)
+        current = self.await_state(second['id'], {'done', 'error'})
+        self.assertEqual(current['state'], 'done', current)
+        self.assertEqual(current['report']['regression']['previousRunId'], first['id'])
+        self.assertIn('comparability', current['report']['regression'])
+        self.assertEqual((Path(self.temp.name) / first['id'] / 'report.json').read_bytes(), before)
+
+    def test_issue_reference_roundtrip_is_revision_protected_and_exported(self):
+        _, created, _ = self.start(testType='single')
+        self.await_state(created['id'], {'done', 'error'})
+        payload = {'resultId': 'row-1', 'reviewer': 'QA-B', 'status': 'BUG_CONFIRMED',
+                   'reason': 'Checked against contract', 'expectedRevision': 0,
+                   'issueRef': 'https://issues.example.invalid/QA-12'}
+        path = f"/api/scans/{created['id']}/reviews"
+        status, body, _ = self.request('POST', path, payload)
+        self.assertEqual(status, 200)
+        self.assertEqual(body['review']['issueRef'], payload['issueRef'])
+        self.assertEqual(self.request('POST', path, payload)[0], 409)
+        status, export, _ = self.request('GET', f"/api/scans/{created['id']}.csv")
+        self.assertEqual(status, 200)
+        self.assertIn(payload['issueRef'], export.decode('utf-8-sig'))
+
+    def test_disk_failure_is_error_and_keeps_collected_report_available_in_memory(self):
+        original_save = self.server.service.store.save
+
+        def fail_terminal(job):
+            if job.get('state') in ('done', 'cancelled', 'error'):
+                raise OSError('Synthetic disk unavailable')
+            return original_save(job)
+
+        with patch.object(self.server.service.store, 'save', side_effect=fail_terminal):
+            _, created, _ = self.start()
+            failed = self.await_state(created['id'], {'error'})
+            self.assertIn('EVIDENCE_SAVE_FAILED', failed['error'])
+            self.assertIsNotNone(failed['report'])
+            self.assertEqual(self.request('GET', f"/api/scans/{created['id']}.json")[0], 200)
+            listed = self.request('GET', '/api/scans')[1]['scans']
+            self.assertEqual(listed[0]['state'], 'error')
+        self.assertIsNone(self.server.service.active)
+
+    def test_second_server_cannot_recover_an_owned_report_directory(self):
+        with self.assertRaisesRegex(ValueError, '다른 서버'):
+            Server(('127.0.0.1', 0), runs_dir=Path(self.temp.name))
+
+    def test_invalid_runner_report_is_error_with_original_evidence_retained(self):
+        self.mode = 'invalid-report'
+        _, created, _ = self.start()
+        failed = self.await_state(created['id'], {'error'})
+        self.assertIn('REPORT_CONTRACT_INVALID', failed['error'])
+        self.assertIsNotNone(failed['report'])
+        self.assertEqual(self.request('GET', f"/api/scans/{created['id']}.json")[0], 200)
+
+    def test_shutdown_keeps_directory_lease_until_inflight_review_is_durable(self):
+        _, created, _ = self.start()
+        self.await_state(created['id'], {'done', 'error'})
+        entered, release = threading.Event(), threading.Event()
+        replies, failures = [], []
+        original_save = self.server.service.store.save
+
+        def delayed_save(job):
+            entered.set()
+            if not release.wait(timeout=5):
+                raise RuntimeError('Review gate was not released')
+            return original_save(job)
+
+        payload = {'resultId': 'row-1', 'reviewer': 'QA-A', 'status': 'BUG_CONFIRMED',
+                   'reason': 'First reviewer', 'expectedRevision': 0}
+
+        def post_review():
+            try:
+                replies.append(self.request('POST', f"/api/scans/{created['id']}/reviews", payload)[0])
+            except Exception as exc:
+                failures.append(exc)
+
+        with patch.object(self.server.service.store, 'save', side_effect=delayed_save):
+            request_thread = threading.Thread(target=post_review)
+            request_thread.start()
+            close_thread = None
+            try:
+                self.assertTrue(entered.wait(timeout=2))
+                self.server.shutdown()
+                close_thread = threading.Thread(target=self.server.server_close)
+                close_thread.start()
+                deadline = time.monotonic() + 1
+                while not self.server.service.closing and time.monotonic() < deadline:
+                    threading.Event().wait(0.01)
+                self.assertTrue(self.server.service.closing)
+                self.assertTrue(close_thread.is_alive(), 'In-flight review must finish before releasing the lease')
+                with self.assertRaisesRegex(ValueError, '다른 서버'):
+                    Server(('127.0.0.1', 0), runs_dir=Path(self.temp.name))
+            finally:
+                release.set()
+                request_thread.join(timeout=3)
+                if close_thread:
+                    close_thread.join(timeout=3)
+            self.assertFalse(request_thread.is_alive())
+            self.assertFalse(close_thread.is_alive())
+        self.assertEqual(failures, [])
+        self.assertEqual(replies, [200])
+        replacement = Server(('127.0.0.1', 0), runs_dir=Path(self.temp.name))
+        try:
+            with self.assertRaises(ReviewConflict):
+                replacement.service.store.review(created['id'], 'row-1', 'QA-B', 'VERIFIED_OK', 'Stale review', 0)
+            review = replacement.service.store.review(created['id'], 'row-1', 'QA-B', 'RETEST_REQUIRED', 'Latest review', 1)
+            self.assertEqual([event['reviewer'] for event in review['events']], ['QA-A', 'QA-B'])
+        finally:
+            replacement.server_close()
 
 
 class CsvExportTests(unittest.TestCase):

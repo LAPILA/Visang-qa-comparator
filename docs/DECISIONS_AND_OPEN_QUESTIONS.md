@@ -1,6 +1,8 @@
 # 결정 기록과 미결정 질문
 
-> 최초 설계 결정 기록입니다. 후속 MVP에서 채택한 구현·제한·검증 결과는 [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md)에 있습니다.
+> 최초 설계 결정 기록입니다. **2026-11-03 v0.2의 구현·제한·검증 결과는 [IMPLEMENTATION_STATUS](IMPLEMENTATION_STATUS.md), 확정 7상태·인터페이스·판정 계약은 [RESULT_CONTRACT](RESULT_CONTRACT.md)에 있습니다.** 아래 ADR의 5상태·예정 모듈 등은 최초 설계 시점 기록이며 현재 계약을 대체하지 않습니다.
+
+> **2026-11-03 URL 확인 갱신:** 사용자가 4제품 × 운영/STG/바이브 개발/레거시 개발의 16개 주소를 제공했다. 현재 등록은 [ENVIRONMENT_URLS](ENVIRONMENT_URLS.md)와 `qa/environments.py`를 따른다. 중고등 모바일 STG는 `stg-mv.vivasam.com`으로 확인되어 과거의 미확정·오타 기록을 대체한다. 주소 등록과 실제 접속 검증은 구분한다.
 
 작성일: 2026-10-30 (KST). 결정의 범위는 **설계 초안**이다. 코드 구현·서비스 정책 승인·배포 검증을 대신하지 않는다. 현재 상태는 [AS_IS_ARCHITECTURE.md](AS_IS_ARCHITECTURE.md), 판정/인터페이스의 기준은 [TEST_STRATEGY.md](TEST_STRATEGY.md), 담당/PR 계획은 [ROADMAP.md](ROADMAP.md)에 있다.
 
