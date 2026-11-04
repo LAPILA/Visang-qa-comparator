@@ -32,6 +32,19 @@ class MatchingTests(unittest.TestCase):
         rows = match_pages([a], [b])
         self.assertEqual(len(rows), 2)
         self.assertTrue(all(not row['match']['approved'] for row in rows))
+        # The folded route is offered as a reviewable candidate, never forced.
+        self.assertEqual(rows[0]['match']['candidates'][0]['method'], 'EQUIVALENT_ROUTE')
+        self.assertFalse(rows[0]['match']['candidates'][0]['eligible'])
+
+    def test_extension_and_home_alias_pair_when_heading_corroborates(self):
+        rows = match_pages([self.page('https://a.test/subject.do', 'Subjects')],
+                           [self.page('https://b.test/subject', 'Subjects')])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual((rows[0]['match']['method'], rows[0]['match']['approved']), ('EQUIVALENT_ROUTE', True))
+        rows = match_pages([self.page('https://e.test/main', 'Main')], [self.page('https://stg-e.test/', 'Main')])
+        self.assertEqual((rows[0]['match']['method'], rows[0]['match']['approved']), ('EQUIVALENT_ROUTE', True))
+        rows = match_pages([self.page('https://a.test/#/notice?id=1', 'N')], [self.page('https://b.test/notice.do?id=2', 'N')])
+        self.assertEqual(len(rows), 2, 'Different instance identifiers are never folded')
 
     def test_explicit_alias_with_same_instance_query(self):
         alias = [{'baseline': '/subject.do', 'candidate': '/subject', 'page_class': 'subject'}]
@@ -63,7 +76,11 @@ class MatchingTests(unittest.TestCase):
         self.assertEqual(pairs[0]['match']['method'], 'SELECTED_START_PAGES')
         self.assertIs(pairs[0]['baseline'], a)
         self.assertIs(pairs[0]['candidate'], b)
-        self.assertEqual(len(match_pages([a], [b])), 2, 'Opting out must preserve independent identities')
+        self.assertEqual(len(match_pages([a], [b], route_equivalence=False)), 2, 'Opting out must preserve independent identities')
+        folded = match_pages([a], [b])
+        self.assertEqual(len(folded), 1, 'A #/ prefix alone is an equivalent application route')
+        self.assertEqual(folded[0]['match']['method'], 'EQUIVALENT_ROUTE')
+        self.assertTrue(folded[0]['match']['approved'])
 
     def test_start_pair_never_merges_other_hash_routes_or_query_instances(self):
         a = [self.page('https://old.test/#/', ''), self.page('https://old.test/#/notice?id=1', '')]
@@ -311,7 +328,7 @@ class SingleEnvironmentTests(unittest.TestCase):
                 self.assertEqual(report['totals']['candidateVisited'], 0)
                 self.assertEqual(report['manifest']['testType'], test_type)
                 self.assertEqual(report['manifest']['schemaVersion'], '2.0')
-                self.assertEqual(report['manifest']['ruleVersion'], 'v2.2')
+                self.assertEqual(report['manifest']['ruleVersion'], 'v2.3')
                 self.assertEqual(report['results'][0]['match']['method'], 'SINGLE_ENVIRONMENT')
                 self.assertFalse(any('NOT_DISCOVERED' in row['flags'] for row in report['results']))
                 self.assertEqual({c['reason_code'] for c in report['results'][0]['checks']}, {'DOCUMENT_REACHABLE'})

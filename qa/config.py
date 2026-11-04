@@ -147,6 +147,33 @@ def _resolve_environment(data, profile, side):
     return url, identifier, label
 
 
+_LOGIN_SELECTOR_KEYS = ('usernameSelector', 'passwordSelector', 'submitSelector', 'successSelector', 'failureSelector')
+
+
+def _login_config(value):
+    """Validate the login *form description* only. Credentials never pass through here."""
+    if value in (None, '', False, {}):
+        return None
+    if not isinstance(value, dict):
+        raise ValueError('login 설정은 객체여야 합니다.')
+    forbidden = {key for key in value if key.lower() in {'password', 'pw', 'passwd', 'id', 'username', 'user', 'account', 'token', 'cookie'}}
+    if forbidden:
+        raise ValueError('login 설정에는 선택자와 URL만 넣습니다. 계정·비밀번호는 환경변수나 secrets 파일로만 제공하세요.')
+    result = {'url': validate_url(value.get('url')) if value.get('url') else None}
+    for key in _LOGIN_SELECTOR_KEYS:
+        raw = value.get(key)
+        if raw in (None, ''):
+            if key in ('usernameSelector', 'passwordSelector', 'submitSelector'):
+                raise ValueError(f'login.{key}는 필수입니다.')
+            result[key] = None
+            continue
+        result[key] = _text(raw, 'login.' + key, 300)
+    result['accountKey'] = _text(value.get('accountKey', 'default'), 'login.accountKey', 50)
+    if not re.fullmatch(r'[A-Za-z0-9_.-]+', result['accountKey']):
+        raise ValueError('login.accountKey는 영문·숫자·._-만 사용합니다.')
+    return result
+
+
 def public_options(options):
     names = {'route_aliases': 'aliases', 'safe_actions': 'safeActions', 'scenario_ids': 'scenarioIds',
              'allowed_paths': 'allowedPaths', 'allowed_hosts': 'allowedHosts', 'max_pages': 'maxPages',
@@ -155,6 +182,7 @@ def public_options(options):
              'test_type': 'testType', 'previous_run_id': 'previousRunId',
              'private_mask_selectors': 'privateMaskSelectors',
              'pair_start_pages': 'pairStartPages', 'resource_hosts': 'resourceHosts',
+             'route_equivalence': 'routeEquivalence', 'login': 'login',
              'crawl_scope': 'crawlScope', 'baseline_name': 'baselineName', 'candidate_name': 'candidateName',
              'baseline_environment_id': 'baselineEnvironmentId', 'candidate_environment_id': 'candidateEnvironmentId'}
     return {names.get(key, key): value for key, value in options.items()
@@ -184,6 +212,11 @@ def parse_options(data, base_origin):
     except ValueError as exc:
         raise ValueError('시작 페이지 비교 옵션은 true 또는 false여야 합니다.') from exc
     pair_start_pages = pair_start_pages if test_type == 'comparison' else False
+    try:
+        route_equivalence = _boolean(merged.get('routeEquivalence', True))
+    except ValueError as exc:
+        raise ValueError('동등 라우트 매칭 옵션은 true 또는 false여야 합니다.') from exc
+    login = _login_config(merged.get('login'))
     baseline, baseline_environment_id, baseline_label = _resolve_environment(data, profile, 'baseline')
     if test_type == 'comparison':
         candidate, candidate_environment_id, candidate_label = _resolve_environment(data, profile, 'candidate')
@@ -286,7 +319,8 @@ def parse_options(data, base_origin):
         'baseline_environment_id': baseline_environment_id, 'candidate_environment_id': candidate_environment_id,
         'baseline_name': baseline_name, 'candidate_name': candidate_name, 'crawl_scope': crawl_scope,
         'test_type': test_type, 'previous_run_id': previous_run_id, 'conditions': conditions,
-        'pair_start_pages': pair_start_pages, 'resource_hosts': sorted(resource_hosts),
+        'pair_start_pages': pair_start_pages, 'route_equivalence': route_equivalence, 'login': login,
+        'resource_hosts': sorted(resource_hosts),
         'private_mask_selectors': private_masks,
         'profile_id': profile_id, 'operator_id': _text(merged.get('operatorId', 'QA-A'), '담당자', 50),
         'mode': mode, 'max_pages': _number(merged, 'maxPages', 5, 1, 30, True),

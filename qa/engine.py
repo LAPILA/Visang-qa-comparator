@@ -679,6 +679,58 @@ def _skipped_page(url, side, reason, depth=0, *, status=None, actual=None):
                                           expected='Planned page visit', actual=actual)], coverage={})
 
 
+def _test_account_login(context, side, options, budget, state):
+    """Fill a configured login form with locally stored test-account credentials.
+
+    Credentials come from qa.secrets only, never from options/report. The step
+    returns a single check for the start page row and never raises.
+    """
+    from .secrets import load_credentials
+    login = options.get('login') or {}
+    seed = options['baseline_url' if side == 'a' else 'candidate_url']
+    target = login.get('url') or seed
+    credentials = load_credentials(side, login.get('accountKey', 'default'))
+    if credentials is None:
+        return check(side + '.login', 'BLOCKED', 'LOGIN_CREDENTIALS_MISSING',
+                     expected='QA_LOGIN_[A|B]_ID/PW environment variables or secrets/accounts.json',
+                     actual='No credentials available on this machine'), None
+    if not host_allowed(target, options['allowed_hosts']):
+        return check(side + '.login', 'BLOCKED', 'LOGIN_HOST_NOT_APPROVED',
+                     expected='Login URL host in allowedHosts', actual=sanitize_url(target)), None
+    page = context.new_page()
+    state['manual_auth'] = True  # auth phase: the network guard permits the form POST on approved hosts
+    try:
+        page.goto(target, wait_until='domcontentloaded', timeout=budget.timeout(20000))
+        username, password = page.locator(login['usernameSelector']).first, page.locator(login['passwordSelector']).first
+        username.fill(credentials.username, timeout=budget.timeout(5000))
+        password.fill(credentials.password, timeout=budget.timeout(5000))
+        before = page.url
+        page.locator(login['submitSelector']).first.click(timeout=budget.timeout(5000))
+        try:
+            page.wait_for_load_state('load', timeout=budget.timeout(10000))
+        except Exception:
+            pass
+        page.wait_for_timeout(min(400, budget.timeout(400)))
+        failure_visible = bool(login.get('failureSelector')) and page.locator(login['failureSelector']).first.is_visible()
+        if login.get('successSelector'):
+            success = page.locator(login['successSelector']).first.is_visible() and not failure_visible
+            basis = 'successSelector'
+        else:
+            still_on_form = page.locator(login['passwordSelector']).count() > 0 and page.url == before
+            success = not failure_visible and not still_on_form
+            basis = 'password field gone or URL changed'
+        if success:
+            return check(side + '.login', 'PASS', 'TEST_ACCOUNT_LOGIN_OK', expected='Login success evidence: ' + basis,
+                         actual='Signed in with a locally stored test account (' + credentials.source.split(':')[0] + ')'), credentials
+        return check(side + '.login', 'BLOCKED', 'LOGIN_FAILED', expected='Login success evidence: ' + basis,
+                     actual='Failure marker visible' if failure_visible else 'Login form still present'), credentials
+    except Exception as exc:
+        return check(side + '.login', 'ERROR', 'LOGIN_STEP_ERROR', expected='Login form interaction', actual=type(exc).__name__), credentials
+    finally:
+        state['manual_auth'] = False
+        page.close()
+
+
 def _crawl(browser, side, options, artifact_root, run_id, progress, budget, auth_gate):
     options = dict(options)
     options['_side_action_start'] = budget.actions
@@ -720,6 +772,18 @@ def _crawl(browser, side, options, artifact_root, run_id, progress, budget, auth
                 state['manual_auth'] = False
             if budget.reason():
                 return OrderedDict([(seed, _skipped_page(seed, side, budget.reason()))]), [], state
+        login_check = None
+        if options.get('login') and not options.get('manual_login'):
+            progress(f'{side.upper()}: 테스트 계정으로 로그인 중')
+            login_check, credentials = _test_account_login(context, side, options, budget, state)
+            if credentials is not None:
+                # Never let the typed account name reach a capture.
+                masks = list(options.get('private_mask_selectors', []))
+                masks.extend(selector for selector in (options['login'].get('usernameSelector'),) if selector and selector not in masks)
+                options['private_mask_selectors'] = masks
+            state['login_check'] = login_check
+            if budget.reason():
+                return OrderedDict([(seed, _skipped_page(seed, side, budget.reason()))]), [], state
         while queue and len(pages) < int(options.get('max_pages', 5)):
             url, depth = queue.popleft()
             if budget.reason():
@@ -728,6 +792,10 @@ def _crawl(browser, side, options, artifact_root, run_id, progress, budget, auth
             progress(f'{side.upper()}: {len(pages) + 1}/{options.get("max_pages", 5)} {sanitize_url(url)}')
             record = _visit(context, url, side, depth, options, artifact_root, run_id, budget, state)
             record['navigationTrail'] = trails.get(normalize_url(url), [])
+            if login_check is not None:
+                login_check = dict(login_check, environment=side, pageId=record['pageId'], timestamp=_now())
+                record['checks'].insert(0, login_check)
+                login_check = None
             pages[normalize_url(url)] = record
             for action in record['actions']:
                 href = action.pop('_navigation_url', None)
@@ -908,7 +976,8 @@ def run_scan(options, run_id, artifact_root, progress, cancelled, auth_gate=None
     progress('Comparing route mappings and region evidence' if comparison else 'Summarizing independent environment assertions')
     start_pair = ({'baseline': options['baseline_url'], 'candidate': options['candidate_url']}
                   if comparison and options.get('pair_start_pages', False) else None)
-    pairs = match_pages(a, b, options.get('route_aliases', []), start_pair=start_pair) if comparison else []
+    pairs = match_pages(a, b, options.get('route_aliases', []), start_pair=start_pair,
+                        route_equivalence=bool(options.get('route_equivalence', True))) if comparison else []
     rows = (_result_rows(pairs, options, artifact_root, run_id)
             if comparison else _single_rows(a, options))
     for side, deferred in (('a', a_skip), ('b', b_skip)):
@@ -949,8 +1018,10 @@ def run_scan(options, run_id, artifact_root, progress, cancelled, auth_gate=None
                    locale='ko-KR', timezone='Asia/Seoul', colorScheme='light', reducedMotion='reduce',
                    fullPage=False, maskVersion='v2', pixelTolerance=25)
     rules = {key: options.get(key, []) for key in ('route_aliases', 'regions', 'scenario_ids', 'conditions', 'safe_actions', 'private_mask_selectors')}
-    rules.update(visual_threshold=options.get('visual_threshold', 2), rule_version='v2.2',
-                 pair_start_pages=bool(options.get('pair_start_pages', False)))
+    rules.update(visual_threshold=options.get('visual_threshold', 2), rule_version='v2.3',
+                 pair_start_pages=bool(options.get('pair_start_pages', False)),
+                 route_equivalence=bool(options.get('route_equivalence', True)),
+                 login_form={key: value for key, value in (options.get('login') or {}).items()} or None)
     checksum = lambda value: sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode('utf-8')).hexdigest()
     incomplete = bool(blocked_requests or a_skip or b_skip or budget.reason()
                       or any(c['status'] in ('BLOCKED', 'ERROR') and c.get('required', True) for c in unique_checks.values()))
@@ -967,12 +1038,15 @@ def run_scan(options, run_id, artifact_root, progress, cancelled, auth_gate=None
                               browser=browser_version, viewport=options.get('viewport', {'width': 1365, 'height': 768}),
                               mode=options.get('mode', 'combined'), testType=test_type,
                               status='CANCELLED' if was_cancelled else 'PARTIAL' if incomplete else 'COMPLETED',
-                              ruleVersion='v2.2', rulesHash=checksum(rules), scope=scope, scopeHash=checksum(scope), capture=capture,
+                              ruleVersion='v2.3', rulesHash=checksum(rules), scope=scope, scopeHash=checksum(scope), capture=capture,
                               environmentNames={'a': options.get('baseline_name') or 'A',
                                                 'b': options.get('candidate_name') or 'B'} if comparison else {'a': options.get('baseline_name') or 'A'},
                               environmentIds={'a': options.get('baseline_environment_id', 'custom'),
                                               'b': options.get('candidate_environment_id', 'custom')} if comparison else {'a': options.get('baseline_environment_id', 'custom')},
-                              pairStartPages=bool(start_pair),
+                              pairStartPages=bool(start_pair), routeEquivalence=bool(options.get('route_equivalence', True)),
+                              login={'method': 'MANUAL' if options.get('manual_login') else 'TEST_ACCOUNT' if options.get('login') else 'NONE',
+                                     'form': {key: value for key, value in (options.get('login') or {}).items()} or None,
+                                     'credentialsStored': False},
                               scenarioIds=options.get('scenario_ids', []), conditions=options.get('conditions', []),
                               routeAliases=options.get('route_aliases', []), dataPolicy='INDEPENDENT_LIVE_WITH_CONFIGURED_MASKS'),
                 coverage=dict(discoveredPages=len(a) + len(b) + len(a_skip) + len(b_skip),

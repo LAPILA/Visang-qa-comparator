@@ -25,6 +25,51 @@ def page_key(url):
     return (p.path or '/') + ('?' + p.query if p.query else '') + ('#' + p.fragment if p.fragment else '')
 
 
+_ROUTE_EXTENSION = re.compile(r'\.(?:do|html?|jsp|php|aspx?|action)$', re.I)
+_HOME_ALIASES = frozenset({'', 'index', 'main', 'home', 'index.html', 'main.do', 'index.do'})
+
+
+def equivalent_route_key(url):
+    """Return a conservative application-route identity shared by SPA and legacy URLs.
+
+    The same product is often served as ``/notice``, ``/#/notice`` and
+    ``/notice.do`` depending on the environment generation, and the home page as
+    ``/``, ``/#/`` or ``/main``. This key folds only those well-known shapes:
+    hash-route prefix, a server-side page extension, a trailing slash and the
+    home aliases. Query order, instance IDs and every other path segment stay
+    exact, so ``/notice?id=1`` and ``/notice?id=2`` remain different pages.
+    """
+    p = urlsplit(url)
+    path, query = p.path or '/', p.query
+    hash_route, _, hash_query = p.fragment.partition('?')
+    if hash_route.startswith('/'):
+        # /#/notice?x=1 is an application route rendered by the document at /.
+        path, query = hash_route, '&'.join(item for item in (query, hash_query) if item)
+    elif p.fragment:
+        # A plain anchor (#top) is not a route; it never changes identity.
+        pass
+    segments = [unquote(item) for item in path.split('/') if item]
+    if segments:
+        segments[-1] = _ROUTE_EXTENSION.sub('', segments[-1])
+    if len(segments) == 1 and segments[0].casefold() in _HOME_ALIASES:
+        segments = []
+    route = '/' + '/'.join(segment.casefold() for segment in segments)
+    return route + ('?' + query if query else '')
+
+
+def _hash_only_difference(left, right):
+    """True when the two URLs differ only by a ``#/`` SPA prefix or home alias."""
+    def shape(value):
+        p = urlsplit(value)
+        if p.fragment.startswith('/'):
+            return 'hash', (p.path or '/').rstrip('/') or '/'
+        return 'path', None
+    (kind_a, shell_a), (kind_b, shell_b) = shape(left), shape(right)
+    if kind_a == kind_b == 'hash':
+        return shell_a == shell_b
+    return kind_a != kind_b
+
+
 def _alias_key(url, aliases, side):
     identity = page_key(url)
     p = urlsplit(url)
@@ -169,13 +214,17 @@ def _semantic(left, right):
                 reason=conflicts[0] if conflicts else 'REQUIRES_QA_MAPPING', evidence=evidence)
 
 
-def match_pages(baseline, candidate, aliases=None, *, start_pair=None):
+def match_pages(baseline, candidate, aliases=None, *, start_pair=None, route_equivalence=True):
     """Reserve explicit identities first, then propose mutual unique function matches.
 
     Selected starts apply to the two requested URLs only, including their query
     and fragment. Every priority uses the full bipartite candidate graph, so an
     earlier ambiguous page cannot steal another page's exact or explicit match.
     Semantic evidence never sets approved=True and collisions remain unpaired.
+    With ``route_equivalence`` (default) the well-known SPA/legacy URL shapes
+    (``/``, ``/#/``, ``/main``, ``.do``) are paired as EQUIVALENT_ROUTE: approved
+    when the heading corroborates or when only the ``#/`` prefix differs and no
+    semantic conflict exists; otherwise listed as a reviewable candidate only.
     """
     aliases, start_pair = aliases or [], start_pair or {}
     a_pages = list(baseline.values()) if isinstance(baseline, dict) else list(baseline)
@@ -251,6 +300,25 @@ def match_pages(baseline, candidate, aliases=None, *, start_pair=None):
                                         'Exact path, query sequence and fragment identity.')] + (semantic or {}).get('evidence', []))
                 exact.append((i, j))
     reserve(exact)
+    if route_equivalence:
+        equivalent = []
+        for i, a in enumerate(a_pages):
+            for j, b in enumerate(b_pages):
+                if (i, j) in suggestions or equivalent_route_key(a['url']) != equivalent_route_key(b['url']):
+                    continue
+                semantic = _semantic(a, b)
+                conflicts = bool(semantic) and not semantic['eligible']
+                corroborated = bool(a.get('heading') and a['heading'] == b.get('heading')) or bool(semantic and semantic['eligible'])
+                hash_only = _hash_only_difference(a['url'], b['url'])
+                trusted = not conflicts and (corroborated or hash_only)
+                add(i, j, 'EQUIVALENT_ROUTE', approved=trusted,
+                    reason='ROUTE_EQUIVALENT' if trusted else 'EQUIVALENT_ROUTE_CONFLICT' if conflicts else 'REQUIRES_QA_MAPPING',
+                    eligible=trusted,
+                    evidence=[_evidence('EQUIVALENT_ROUTE', page_key(_public_url(a['url'])), page_key(_public_url(b['url'])),
+                                        'Same application route after folding #/ prefix, page extension, trailing slash and home alias.')]
+                    + (semantic or {}).get('evidence', []))
+                equivalent.append((i, j))
+        reserve(equivalent)
     semantic_edges = []
     for i, a in enumerate(a_pages):
         for j, b in enumerate(b_pages):

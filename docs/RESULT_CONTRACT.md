@@ -2,6 +2,13 @@
 
 기준일: 2026-11-03 KST. 현재 구현의 공동 인터페이스다. 목표 설계와 구현 범위는 [구현 현황](IMPLEMENTATION_STATUS.md), 운영은 [OPERATIONS](OPERATIONS.md)를 함께 본다. 기존 Python/Playwright/Pillow/순수 JS 구조를 유지한다.
 
+## 검수 분류(Triage) 필드 (v2.3)
+
+- `results[].triage = {bucket, reason, label, basis: [reason_code...], suggestedReview}` · `bucket ∈ ISSUE | HUMAN_CHECK | RETEST | OK | NOT_RUN`
+- `totals.triage = {ISSUE, HUMAN_CHECK, RETEST, OK, NOT_RUN}`
+- 읽을 때마다 `qa/triage.py`로 재계산하므로 저장된 값과 다를 수 있는 유일한 필드다. 자동 `status`·`review`는 바꾸지 않는다. 결정표는 [TRIAGE_POLICY](TRIAGE_POLICY.md).
+- `manifest.login = {method: NONE|MANUAL|TEST_ACCOUNT, form: {...선택자} | null, credentialsStored: false}` — 계정 문자열은 어떤 필드에도 들어가지 않는다.
+
 ## 1. 실행 설정
 
 HTTP API는 camelCase, 엔진 설정은 snake_case를 사용한다. 변환 경계는 `qa/config.py:parse_options/public_options` 한 곳이다.
@@ -32,7 +39,7 @@ v0.2.1의 시작 쌍 매칭은 `SELECTED_START_PAGES / START_URLS_DECLARED_EQUIV
 
 규칙 버전은 `v2.1`이며 시작 쌍 옵션·정적 호스트 범위를 hash와 manifest에 기록한다. 기존 v2 실행과 정책이 달라지면 회귀 비교 가능성에서 차이를 표시한다. `JS_ERROR_AFTER_POLICY_BLOCK`/`CONSOLE_ERROR_AFTER_POLICY_BLOCK`는 TEST_INFRA/POLICY_INTERFERENCE, 원시 browser 메시지·출처·관련 차단 요청을 보존한다. `policyInterference`와 `policyRelation`은 원인 확정이나 제품 버그 확정이 아니다.
 
-v0.3.0의 규칙 버전은 **v2.2**다. `navigationTrail/pageSignature`와 전체 후보 관계를 통해 `SEMANTIC_CANDIDATE`를 제안하되 승인하지 않는다. alias/시작 쌍/정확 경로를 먼저 예약하며 후보 근거·모순·사용 가능 여부를 보존한다. `report.inventory`의 환경별 목록·방문/보류·매칭 후보와 `GET /api/scans/{id}/inventory.csv` 계약은 [ENVIRONMENT_DISCOVERY](ENVIRONMENT_DISCOVERY.md)에 기록한다. 일반 페이지 키는 query 순서·중복·percent encoding·hash를 그대로 보존하고 비밀 URL의 자동 alias는 비활성화한다.
+v0.3.1의 규칙 버전은 **v2.3**이다. v2.3은 `EQUIVALENT_ROUTE` 매칭 방법(`/`·`/#/`·`/main`·`.do`·끝 슬래시 접기, 확정 조건: 제목 일치 또는 `#/`만 다름)과 행별 `triage` 객체, `manifest.login`·`manifest.routeEquivalence`를 추가한다. v2.2의 규칙은 그대로 유지된다: `navigationTrail/pageSignature`와 전체 후보 관계를 통해 `SEMANTIC_CANDIDATE`를 제안하되 승인하지 않는다. alias/시작 쌍/정확 경로를 먼저 예약하며 후보 근거·모순·사용 가능 여부를 보존한다. `report.inventory`의 환경별 목록·방문/보류·매칭 후보와 `GET /api/scans/{id}/inventory.csv` 계약은 [ENVIRONMENT_DISCOVERY](ENVIRONMENT_DISCOVERY.md)에 기록한다. 일반 페이지 키는 query 순서·중복·percent encoding·hash를 그대로 보존하고 비밀 URL의 자동 alias는 비활성화한다.
 
 ## 2. 실행과 결과의 구분
 

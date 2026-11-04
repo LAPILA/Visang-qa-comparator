@@ -102,6 +102,7 @@ def unexecuted_status(reason):
     if (reason == 'CANCELLED' or 'LIMIT' in reason or 'PREREQUISITE' in reason
             or reason in {'MANUAL_AUTH_REQUIRED', 'LOGIN_REQUIRED', 'SESSION_EXPIRED',
                           'ROLE_UNAVAILABLE', 'INSUFFICIENT_DATA', 'NO_COMPARABLE_PIXELS',
+                          'LOGIN_FAILED', 'LOGIN_CREDENTIALS_MISSING', 'LOGIN_HOST_NOT_APPROVED',
                           'MATCH_SIDE_UNAVAILABLE', 'PAGE_NOT_READY', 'PREVIOUS_STATE_RESET_FAILED'}):
         return 'BLOCKED'
     return 'SKIP'

@@ -2,6 +2,12 @@
 
 기준일: 2026-11-03 KST. 기존 Python/Playwright/Pillow/순수 JS를 유지하며 동료 MD의 AR01~AR04와 환경별 탐색·기능 매핑을 확장했다. 공통 인터페이스는 [RESULT_CONTRACT](RESULT_CONTRACT.md), 사용 순서는 [ENVIRONMENT_DISCOVERY](ENVIRONMENT_DISCOVERY.md), 운영·검수는 [OPERATIONS](OPERATIONS.md)를 따른다. 원래 감사 문서와 [v0.1 기록](releases/0.1.0.md)은 과거 사실·장기 설계를 구분해서 읽는다.
 
+## v0.3.1 · 규칙 v2.3 (2026-11-04)
+
+- 전체 **211개 테스트 통과, SKIP 0개** (`python -u -B scripts/run_tests.py`), `node --check public/app.js` 통과.
+- 추가: 검수 분류(Triage) 레이어, 동등 라우트 매칭, 테스트 계정 자동 로그인, VISANG QA AI UI(4단계 설정·대시보드·다크 테마). 규칙 버전이 v2.3으로 올라 v2.2 이전 실행과는 회귀 비교 불가로 표시된다.
+- 변경하지 않은 것: 7상태 의미, 검수 revision 계약, 읽기 전용 정책, 보고서 스키마 2.0(필드 추가만).
+
 ## 1. 구현 범위와 코드 근거
 
 | 기능 | 현재 구현·한계 | 실제 코드 |
@@ -12,6 +18,7 @@
 | 기능 매칭 후보 | alias/시작 쌍/정확 경로를 먼저 예약. 서로 유일한 메뉴·폼·구조 후보만 REVIEW. 모순·상세 ID 차이·중복은 강제 연결하지 않음. | `qa/matching.py:172` |
 | 목록·매핑 초안·내보내기 | 환경별 방문/보류·URL·근거, 수동 alias 초안, 페이지 CSV와 전체 JSON. 과거 결과/검수 변경·자동 실행 없음. | `qa/inventory.py:20`, `public/app.js:549`, `app.py:61` |
 | URL 보존 | query 순서·중복·percent encoding·hash 보존. 비밀 제거가 필요한 URL은 redact하고 자동 alias 비활성. | `qa/matching.py:55`, `qa/store.py:22` |
+| 검수 분류·동등 라우트·테스트 계정 로그인 (v2.3) | 7상태 위 5분류(`qa/triage.py`), `/`·`/#/`·`/main`·`.do` 동등 라우트(`EQUIVALENT_ROUTE`), 선택자만 받는 로그인 폼 + 로컬 자격증명(`qa/secrets.py`). 합성 로그인 페이지로 성공/실패/미제공 경로와 비밀 미노출을 테스트. | `qa/triage.py`, `qa/matching.py:equivalent_route_key`, `qa/engine.py:_test_account_login`, `tests/test_login_and_triage.py` |
 | 4목적·7상태 | 환경 비교·단일·회귀·조건 UI와 PASS/FAIL/DIFF/SKIP/BLOCKED/ERROR/REVIEW. 단일 계열 B 방문 없음. | `qa/engine.py:871`, `qa/policy.py:84` |
 | 시각·DOM·데이터 | 영역 PNG·마스크·존재/가시성·차이율·분모. 전체 DB 동일성·자동 동적 영역 탐지·범용 겹침 탐지는 미지원. | `qa/engine.py:356`, `qa/comparison.py:12` |
 | 관찰·유형·중복 | HTTP/JS/네트워크·단계/출처/요청 ID·발생 수. 정책 영향 REVIEW와 실제 제품 오류를 구분. 모든 세부 수집기 구현을 뜻하지 않음. | `qa/engine.py:255`, `qa/findings.py:209` |

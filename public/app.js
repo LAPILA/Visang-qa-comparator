@@ -8,10 +8,13 @@ const ISSUE_LABELS = { JS_ERROR_AFTER_POLICY_BLOCK: '차단 후 JS 오류', CONS
 const ENV_LABELS = { a: '환경 A', b: '환경 B', comparison: 'A/B 비교', unknown: '환경 미기록' };
 const CATEGORY_LABELS = { HTTP: 'HTTP 응답', NETWORK: '연결·전송', JAVASCRIPT: 'JavaScript', API: 'API 계약', RESOURCE: '이미지·정적 파일', NAVIGATION: '링크·이동', STRUCTURE: 'DOM·구조', FUNCTIONAL: '기능 동작', VISUAL: '시각·레이아웃', DATA: '데이터·표시 조건', AUTH: '인증·권한', TEST_INFRA: '검사 도구', UNREGISTERED: '분류 미등록' };
 const REGRESSION_LABELS = { NEW: '신규 발견', RECURRING: '재발·지속', RESOLVED_CANDIDATE: '해결 후보', NOT_RETESTED: '재검되지 않음', NON_COMPARABLE: '비교 불가', UNEVALUATED: '회귀 미평가' };
-const SELECT_FILTERS = ['regionFilter', 'testTypeFilter', 'environmentFilter', 'categoryFilter', 'subtypeFilter', 'severityFilter', 'reviewStatusFilter', 'regressionFilter'];
+const SELECT_FILTERS = ['triageFilter', 'regionFilter', 'testTypeFilter', 'environmentFilter', 'categoryFilter', 'subtypeFilter', 'severityFilter', 'reviewStatusFilter', 'regressionFilter'];
 const CONDITION_EXAMPLE = [{ id: 'notice.empty', case: 'empty', url_pattern: '/demo/*', selector: '#empty-state', kind: 'visible', expected: true, preconditions: [{ selector: '#notice-list li', kind: 'count', expected: { equals: 0 } }] }];
+const TRIAGE_LABELS = { ISSUE: '이슈 등록 후보', HUMAN_CHECK: '대인체크', RETEST: '재검 필요', OK: '정상', NOT_RUN: '미실행' };
+const TRIAGE_HINTS = { ISSUE: '기능 미작동·필수 요소 누락·페이지 오류', HUMAN_CHECK: 'DB·이미지 차이, 매핑, 오류 관찰 → 사람이 확인', RETEST: '로그인·데이터·한도 문제로 미검사', OK: '실행한 검증식 통과', NOT_RUN: '정책·범위상 제외' };
+const METHOD_LABELS = { EXPLICIT_ALIAS: '명시적 별칭', SELECTED_START_PAGES: '선택한 시작 페이지 쌍', EXACT_ROUTE: '동일 경로', EQUIVALENT_ROUTE: '동등 라우트 (/ · #/ · /main · .do)', SEMANTIC_CANDIDATE: '기능 유사 후보', STRUCTURE_CANDIDATE: '구조 유사 후보', AMBIGUOUS: '후보 다수 · 미확정', AMBIGUOUS_ALIAS: '별칭 충돌', UNMATCHED: '대응 페이지 없음', NOT_EXECUTED: '미실행', SINGLE_ENVIRONMENT: '단일 환경' };
 const JOB_LABELS = { running: '실행 중', awaiting_auth: '로그인 대기', done: '완료', cancelled: '중단', error: '실행 오류' };
-const state = { token: '', profiles: [], jobs: [], selectedId: null, activeId: null, report: null, job: null, filter: 'ALL', polling: null, pollErrors: 0, submitting: false, findingMap: new Map() };
+const state = { triageFilter: 'ALL', token: '', profiles: [], jobs: [], selectedId: null, activeId: null, report: null, job: null, filter: 'ALL', polling: null, pollErrors: 0, submitting: false, findingMap: new Map() };
 
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
@@ -48,6 +51,7 @@ function link(value, title) {
   const href = safeUrl(value);
   return href ? el('a', { href, target: '_blank', rel: 'noopener noreferrer', text: title || value }) : el('span', { text: title || value || 'URL 없음' });
 }
+function triageBadge(item) { const triage = item.triage || {}; const bucket = triage.bucket || 'NOT_RUN'; return el('span', { class: `triage-badge ${bucket}`, text: TRIAGE_LABELS[bucket] || bucket, title: triage.label || '' }); }
 function badge(status) { return el('span', { class: `status ${STATUS.includes(status) ? status : 'UNKNOWN'}`, text: status || '미기록' }); }
 function numeric(value) { return typeof value === 'number' && Number.isFinite(value) ? value : null; }
 function metric(value) { return numeric(value) ?? '—'; }
@@ -106,7 +110,7 @@ function rowMeta(item) {
     if (item.environment) environmentValues.push(item.environment);
     else { if (item.baseline) environmentValues.push('a'); if (item.candidate) environmentValues.push('b'); }
   }
-  return { findings, environments: unique(environmentValues.map(canonicalEnvironment)), categories: unique(item.categories?.length ? item.categories : findings.map(f => f.category)), subtypes: unique(item.subtypes?.length ? item.subtypes : findings.map(f => f.subtype)), severity: item.severity || findings[0]?.severity || 'UNEVALUATED', regression: item.regression?.classification || 'UNEVALUATED', regressions: item.regression?.classifications?.length ? item.regression.classifications : [item.regression?.classification || 'UNEVALUATED'] };
+  return { triage: item.triage?.bucket || 'NOT_RUN', findings, environments: unique(environmentValues.map(canonicalEnvironment)), categories: unique(item.categories?.length ? item.categories : findings.map(f => f.category)), subtypes: unique(item.subtypes?.length ? item.subtypes : findings.map(f => f.subtype)), severity: item.severity || findings[0]?.severity || 'UNEVALUATED', regression: item.regression?.classification || 'UNEVALUATED', regressions: item.regression?.classifications?.length ? item.regression.classifications : [item.regression?.classification || 'UNEVALUATED'] };
 }
 function reviewIssue(item) { return item.review?.issueRef || item.issueRef || ''; }
 function absoluteIssueUrl(value) { try { const parsed = new URL(value); return ['http:', 'https:'].includes(parsed.protocol) && !parsed.username && !parsed.password ? parsed.href : null; } catch { return null; } }
@@ -192,7 +196,7 @@ function loadRunSettings({ visual = false } = {}) {
     if (value != null) $(`#${id}`).value = value;
   }
   if (!Object.keys(TYPE_LABELS).includes($('#testType').value)) $('#testType').value = 'comparison';
-  for (const [id, snake] of Object.entries({ pairStartPages: 'pair_start_pages', manualLogin: 'manual_login' })) {
+  for (const [id, snake] of Object.entries({ pairStartPages: 'pair_start_pages', routeEquivalence: 'route_equivalence', manualLogin: 'manual_login' })) {
     const value = read(snake, id);
     if (typeof value === 'boolean') $(`#${id}`).checked = value;
   }
@@ -205,6 +209,10 @@ function loadRunSettings({ visual = false } = {}) {
     const value = read(snake, id);
     if (Array.isArray(value)) $(`#${id}`).value = value.join('\n');
   }
+  const login = read('login', 'login');
+  $('#loginEnabled').checked = Boolean(login && typeof login === 'object');
+  for (const [id, key] of Object.entries({ loginUrl: 'url', loginUsernameSelector: 'usernameSelector', loginPasswordSelector: 'passwordSelector', loginSubmitSelector: 'submitSelector', loginSuccessSelector: 'successSelector', loginFailureSelector: 'failureSelector', loginAccountKey: 'accountKey' })) $(`#${id}`).value = login && typeof login === 'object' && typeof login[key] === 'string' ? login[key] : '';
+  updateLoginFields();
   if (visual) $('#mode').value = 'visual';
   syncEnvironmentSelection('baseline'); syncEnvironmentSelection('candidate');
   updateTestType(); updateStartButton(); clearError();
@@ -250,10 +258,18 @@ function buildPayload() {
   if (!payload.operatorId) throw new Error('실행 담당자를 입력해 주세요.');
   if (!payload.baselineName) throw new Error('A 환경 이름을 입력해 주세요.');
   if (!safeUrl(payload.baselineUrl)) throw new Error('아이디·비밀번호를 포함하지 않은 http 또는 https 대상 URL을 입력해 주세요.');
-  if (payload.testType === 'comparison') { payload.candidateUrl = $('#candidateUrl').value.trim(); payload.candidateName = $('#candidateName').value.trim(); payload.candidateEnvironmentId = $('#candidateEnvironmentId').value; payload.pairStartPages = $('#pairStartPages').checked; if (!safeUrl(payload.candidateUrl)) throw new Error('올바른 비교 B URL을 입력해 주세요.'); if (!payload.candidateName) throw new Error('B 환경 이름을 입력해 주세요.'); }
+  if (payload.testType === 'comparison') { payload.candidateUrl = $('#candidateUrl').value.trim(); payload.candidateName = $('#candidateName').value.trim(); payload.candidateEnvironmentId = $('#candidateEnvironmentId').value; payload.pairStartPages = $('#pairStartPages').checked; payload.routeEquivalence = $('#routeEquivalence').checked; if (!safeUrl(payload.candidateUrl)) throw new Error('올바른 비교 B URL을 입력해 주세요.'); if (!payload.candidateName) throw new Error('B 환경 이름을 입력해 주세요.'); }
   if (payload.testType === 'regression') { payload.previousRunId = $('#previousRunId').value; if (!payload.previousRunId) throw new Error('회귀 비교의 기준이 될 과거 실행을 선택해 주세요.'); }
   if (payload.testType === 'conditional') { payload.conditions = readArray('conditions'); if (!payload.conditions.length) throw new Error('조건 기반 검사에 사용할 conditions를 한 개 이상 입력해 주세요.'); }
   for (const name of ['maxPages', 'maxDepth', 'maxActions', 'timeoutSeconds', 'visualThreshold']) payload[name] = Number($(`#${name}`).value);
+  if ($('#loginEnabled').checked) {
+    if (payload.manualLogin) throw new Error('수동 로그인과 테스트 계정 자동 로그인은 동시에 사용할 수 없습니다.');
+    const login = {};
+    for (const [id, key] of Object.entries({ loginUrl: 'url', loginUsernameSelector: 'usernameSelector', loginPasswordSelector: 'passwordSelector', loginSubmitSelector: 'submitSelector', loginSuccessSelector: 'successSelector', loginFailureSelector: 'failureSelector', loginAccountKey: 'accountKey' })) { const value = $(`#${id}`).value.trim(); if (value) login[key] = value; }
+    for (const key of ['usernameSelector', 'passwordSelector', 'submitSelector']) if (!login[key]) throw new Error('테스트 계정 로그인에는 아이디·비밀번호·제출 선택자가 모두 필요합니다.');
+    if (login.url && !safeUrl(login.url)) throw new Error('로그인 URL은 자격증명이 없는 http(s) URL이어야 합니다.');
+    payload.login = login;
+  }
   for (const name of ['aliases', 'regions', 'safeActions', 'scenarioIds', 'privateMaskSelectors']) payload[name] = readArray(name);
   if (payload.privateMaskSelectors.length > 30 || payload.privateMaskSelectors.some(selector => typeof selector !== 'string' || !selector.trim())) throw new Error('privateMaskSelectors는 비어 있지 않은 선택자 문자열을 최대 30개까지 입력할 수 있습니다.');
   for (const name of ['allowedPaths', 'allowedHosts', 'resourceHosts']) payload[name] = $(`#${name}`).value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
@@ -441,7 +457,8 @@ function renderReview(item) {
   const reviewer = el('input', { required: true, maxlength: '50', autocomplete: 'off', 'aria-label': '검수 담당자' }); reviewer.value = $('#operatorId').value || state.job?.operatorId || '';
   const select = el('select', { 'aria-label': '최종 검수 상태', required: true });
   for (const [value, label] of Object.entries(REVIEW_LABELS)) select.append(el('option', { value: value === 'UNREVIEWED' ? '' : value, text: label, disabled: value === 'UNREVIEWED' }));
-  select.value = review.status && review.status !== 'UNREVIEWED' ? review.status : '';
+  select.value = review.status && review.status !== 'UNREVIEWED' ? review.status : (item.triage?.suggestedReview || '');
+  if ((!review.status || review.status === 'UNREVIEWED') && item.triage?.suggestedReview) select.title = `검수 분류 제안: ${TRIAGE_LABELS[item.triage.bucket]} → ${REVIEW_LABELS[item.triage.suggestedReview]}`;
   const reason = el('textarea', { rows: '1', required: true, maxlength: '2000', placeholder: '판정 근거 또는 재검 사유', 'aria-label': '검수 사유' });
   const issueRef = el('input', { type: 'url', maxlength: '2000', autocomplete: 'off', placeholder: '이미 등록한 이슈의 URL · 선택', 'aria-label': '기존 이슈 URL' }); issueRef.value = reviewIssue(item);
   const button = el('button', { type: 'submit', class: 'secondary', text: '검수 저장' });
@@ -486,6 +503,7 @@ function rowFor(item, index) {
   const titleSummary = paired ? `A: ${item.baseline.title || '제목 미기록'} / B: ${item.candidate.title || '제목 미기록'}` : item.baseline ? `A: ${item.baseline.title || '제목 미기록'}` : item.candidate ? `B: ${item.candidate.title || '제목 미기록'}` : '제목 정보 없음';
   const primary = el('div', {}, [el('div', { class: 'pathname', text: item.key === '__ROOT__' ? '홈 페이지' : item.key || item.page_class || '페이지' }), el('div', { class: 'desc', text: titleSummary })]);
   if (item.region_id) primary.append(el('div', { class: 'region-label', text: item.region_id }));
+  primary.append(triageBadge(item));
   primary.append(el('div', { class: 'observation-summary', text: meta.findings[0]?.summary || (item.checks || []).find(check => check.status !== 'PASS')?.reason_code || '구조화 관찰 요약 미등록' }));
   primary.append(el('div', { class: 'desc', text: `${paired ? 'A/B 대응 페이지 · ' : ''}관찰: ${meta.environments.map(value => ENV_LABELS[value] || value).join(' · ') || '환경 미기록'} · ${meta.regressions.map(value => REGRESSION_LABELS[value] || value).join(' / ')}` }));
   const flags = Array.isArray(item.flags) ? item.flags : [];
@@ -496,10 +514,16 @@ function rowFor(item, index) {
   const difference = numeric(item.visual?.differencePercent);
   main.append(primary, badge(item.status), tags, el('span', { class: 'diff-value', text: differenceText(item.visual?.differencePercent) }), el('span', { class: 'review-tag' }, [el('span', {}, [el('span', { text: REVIEW_LABELS[item.review?.status] || '미검수' }), el('span', { class: 'issue-state', text: reviewIssue(item) ? '이슈 연결됨' : '이슈 미등록' })]), el('span', { class: 'expand-mark', text: '⌄', 'aria-hidden': 'true' })]));
   const details = el('div', { class: 'details' });
+  if (item.triage) {
+    details.append(el('div', { class: `triage-note ${item.triage.bucket}` }, [
+      el('strong', { text: `${TRIAGE_LABELS[item.triage.bucket] || item.triage.bucket} · ${item.triage.label || item.triage.reason}` }),
+      el('span', { class: 'mini-meta', text: `근거 코드: ${(item.triage.basis || []).join(', ') || '없음'} · 제안 검수: ${REVIEW_LABELS[item.triage.suggestedReview] || '없음'} (자동 판정은 그대로 두고 최종 결정은 검수자가 합니다)` })]));
+  }
   if (item.match) {
-    const match = el('details', { class: 'sub-details match-details' }, [el('summary', { text: `매칭 이유 보기 · ${item.match.method || '미확정'}` })]);
+    const match = el('details', { class: 'sub-details match-details' }, [el('summary', { text: `매칭 이유 보기 · ${METHOD_LABELS[item.match.method] || item.match.method || '미확정'}` })]);
     match.append(el('p', { class: 'mini-meta', text: `방법: ${item.match.method || '미기록'} · 확신도 ${item.match.confidence ?? '미기록'} · 대응 규칙 확정: ${item.match.approved === true ? '예' : item.match.approved === false ? '아니오' : '미기록'}` }));
     match.append(el('p', { class: 'mini-meta', text: `근거: ${asText(item.match.reason || item.match.reasons || item.match.evidence || '매칭 근거 미기록')}` }));
+    if (item.match.method === 'EQUIVALENT_ROUTE') match.append(el('p', { class: 'mini-meta', text: '같은 앱의 다른 세대 URL(/, /#/, /main, .do, 끝 슬래시)을 같은 라우트로 접었습니다. 제목이 일치하거나 #/ 접두어만 다를 때만 확정하며, 상세 ID가 다르면 접지 않습니다. 설정의 "동등 라우트 매칭"으로 끌 수 있습니다.' }));
     if (item.match.method === 'SELECTED_START_PAGES') match.append(el('p', { class: 'mini-meta', text: '입력한 시작 URL 쌍을 같은 기능으로 비교하도록 설정한 결과입니다. 경로·제목이 달라도 시작 페이지끼리 연결하며, 그 밖의 탐색 페이지에는 이 규칙을 적용하지 않습니다.' }));
     details.append(match);
   }
@@ -611,7 +635,7 @@ function renderRows() {
   results.forEach((item, index) => {
     if (invalidRange || (state.filter !== 'ALL' && item.status !== state.filter) || (region !== 'ALL' && (item.region_id || '__PAGE__') !== region) || (needle && !searchText(item).includes(needle))) return;
     const meta = rowMeta(item);
-    const selections = { testTypeFilter: [item.testType || reportType()], environmentFilter: meta.environments.length ? meta.environments : ['unknown'], categoryFilter: meta.categories.length ? meta.categories : ['UNREGISTERED'], subtypeFilter: meta.subtypes.length ? meta.subtypes : ['UNREGISTERED'], severityFilter: [meta.severity], reviewStatusFilter: [item.review?.status || 'UNREVIEWED'], regressionFilter: meta.regressions };
+    const selections = { triageFilter: [meta.triage], testTypeFilter: [item.testType || reportType()], environmentFilter: meta.environments.length ? meta.environments : ['unknown'], categoryFilter: meta.categories.length ? meta.categories : ['UNREGISTERED'], subtypeFilter: meta.subtypes.length ? meta.subtypes : ['UNREGISTERED'], severityFilter: [meta.severity], reviewStatusFilter: [item.review?.status || 'UNREVIEWED'], regressionFilter: meta.regressions };
     if (Object.entries(selections).some(([id, values]) => $(`#${id}`).value !== 'ALL' && !values.includes($(`#${id}`).value))) return;
     const difference = numeric(item.visual?.differencePercent);
     if (difference == null) { if (!$('#includeNull').checked) return; }
@@ -626,7 +650,7 @@ function setFilter(value) {
   for (const button of document.querySelectorAll('[data-filter]')) { const active = button.dataset.filter === value; button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); }
 }
 function resetResultFilters() {
-  setFilter('ALL'); $('#searchFilter').value = ''; for (const id of SELECT_FILTERS) $(`#${id}`).value = 'ALL'; $('#diffMin').value = ''; $('#diffMax').value = ''; $('#includeNull').checked = true;
+  setFilter('ALL'); $('#searchFilter').value = ''; for (const id of SELECT_FILTERS) $(`#${id}`).value = 'ALL'; for (const node of document.querySelectorAll('.triage-tile')) { node.classList.remove('active'); node.setAttribute('aria-pressed', 'false'); } $('#diffMin').value = ''; $('#diffMax').value = ''; $('#includeNull').checked = true;
 }
 function openAttention(index) {
   resetResultFilters(); renderRows();
@@ -676,6 +700,15 @@ function renderReport(report, job) {
   state.findingMap = new Map((report.findings || []).map(finding => [finding.id, finding]));
   const results = Array.isArray(report.results) ? report.results : [];
   const totals = report.totals || {};
+  const triageRoot = $('#triageStats'); triageRoot.replaceChildren();
+  const triageTotals = totals.triage || {};
+  for (const bucket of ['ISSUE', 'HUMAN_CHECK', 'RETEST', 'OK', 'NOT_RUN']) {
+    const count = triageTotals[bucket] ?? results.filter(item => (item.triage?.bucket || 'NOT_RUN') === bucket).length;
+    const tile = el('button', { type: 'button', class: `triage-tile ${bucket}${$('#triageFilter').value === bucket ? ' active' : ''}`, 'data-triage': bucket, 'aria-pressed': String($('#triageFilter').value === bucket) },
+      [el('span', { class: 'triage-tile-label', text: TRIAGE_LABELS[bucket] }), el('strong', { text: metric(count) }), el('small', { text: TRIAGE_HINTS[bucket] })]);
+    tile.addEventListener('click', () => { const select = $('#triageFilter'); select.value = select.value === bucket ? 'ALL' : bucket; for (const node of triageRoot.querySelectorAll('.triage-tile')) { const active = node.dataset.triage === select.value; node.classList.toggle('active', active); node.setAttribute('aria-pressed', String(active)); } renderRows(); });
+    triageRoot.append(tile);
+  }
   const stats = $('#stats'); stats.replaceChildren();
   const counts = [['ALL', '결과 행', totals.resultRows ?? results.length], ...STATUS.map(status => [status, status, totals[status.toLowerCase()] ?? results.filter(item => item.status === status).length])];
   for (const [status, title, count] of counts) stats.append(el('div', { class: `stat ${status}` }, [el('span', { text: title }), el('strong', { text: metric(count) })]));
@@ -741,6 +774,10 @@ $('#continueBtn').addEventListener('click', async () => {
   try { await api(`/api/scans/${encodeURIComponent(state.activeId)}/continue`, { method: 'POST', body: {} }); $('#authText').textContent = '검사 계속을 요청했습니다. 사용자가 확인한 로그인 상태로 검사를 진행합니다.'; } catch (error) { showError(error.message); $('#continueBtn').disabled = false; }
 });
 $('#refreshHistory').addEventListener('click', async () => { try { await refreshHistory(); const active = state.jobs.find(job => ['running', 'awaiting_auth'].includes(job.state)); if (active) { state.activeId = active.id; updateProgress(active); startPolling(active.id); updateStartButton(); } } catch (error) { showError(error.message); } });
+function updateLoginFields() { const enabled = $('#loginEnabled').checked; for (const node of document.querySelectorAll('#loginFields input')) node.disabled = !enabled; $('#loginFields').classList.toggle('disabled', !enabled); if (enabled) $('#manualLogin').checked = false; }
+$('#loginEnabled').addEventListener('change', updateLoginFields);
+$('#manualLogin').addEventListener('change', () => { if ($('#manualLogin').checked) { $('#loginEnabled').checked = false; updateLoginFields(); } });
+updateLoginFields();
 $('#profileId').addEventListener('change', applyProfile);
 $('#testType').addEventListener('change', updateTestType);
 $('#crawlScope').addEventListener('change', updateCrawlScopeHint);

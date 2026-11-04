@@ -326,4 +326,5 @@ def enrich_report(report):
         rawObservations=sum(max(1, int(obs.get('count') or obs.get('occurrenceCount') or 1)) for obs in raw_events.values()),
         resultRows=len(rows), uniqueFindings=len(findings), linkedIssues=len(linked_issues))
     enriched['findingSchemaVersion'] = '1.0'
-    return enriched
+    from .triage import apply_triage
+    return apply_triage(enriched)

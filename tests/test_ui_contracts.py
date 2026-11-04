@@ -379,7 +379,7 @@ class WorkspaceContractBrowserTests(unittest.TestCase):
         expect(self.page.locator('#candidateUrl')).to_have_value(urls[1])
         self.page.locator('#baselineEnvironmentId').select_option('vibe-dev')
         expect(self.page.locator('#baselineUrl')).to_have_value(urls[2])
-        self.page.get_by_text('수동 로그인과 아이디 기억', exact=True).click()
+        self.page.locator('#loginDetails > summary').click()
         self.page.locator('#rememberIds').check()
         self.page.locator('#rememberedIdA').fill('synthetic-id-a')
         self.page.locator('#rememberedIdB').fill('synthetic-id-b')

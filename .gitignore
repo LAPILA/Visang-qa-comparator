@@ -12,3 +12,7 @@ local-settings/
 *.log
 .playwright-cli/
 mia/
+
+# Local test-account credentials (never commit)
+secrets/
+!secrets/accounts.example.json

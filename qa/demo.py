@@ -103,7 +103,23 @@ li{margin:10px 0}.subtle{color:#566177;font-size:14px}.trap{margin-top:18px;bord
 """
 
 
-def _page(side, feature, query):
+_LOGIN_FORM = ("<section id=\"login-section\"><h2>Test account sign-in</h2>"
+               "<form id=\"login-form\" method=\"post\" action=\"{action}\">"
+               "<label for=\"login-id\">Account</label><input id=\"login-id\" name=\"id\" type=\"text\" autocomplete=\"off\">"
+               "<label for=\"login-pw\">Password</label><input id=\"login-pw\" name=\"pw\" type=\"password\" autocomplete=\"off\">"
+               "<button id=\"login-submit\" type=\"submit\">Sign in</button></form>{error}"
+               "<p class=\"subtle\">Synthetic fixture: any account whose password is <code>demo-pass</code> signs in.</p></section>")
+
+
+def _login_page(side, error=False):
+    body = _LOGIN_FORM.format(action=f"/demo/{side}/login",
+                              error='<p id="login-error" role="alert">Invalid account or password.</p>' if error else '')
+    return (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Sign in | Synthetic QA demo</title>'
+            f'<style>{_CSS}</style></head><body data-qa-demo="{DEMO_MARKER}" data-qa-environment="{side}" '
+            f'data-qa-feature="login"><main id="main-content"><h1>Sign in</h1>{body}</main></body></html>')
+
+
+def _page(side, feature, query, signed_in=None):
     esc = html.escape
     title = {"": "Home", "search": "Search", "notice": "Notices", "detail": "Notice detail", "input": "Input length"}[feature]
     links = "".join(f'<a href="{_route(side, route)}">{label}</a>' for route, label in
@@ -149,9 +165,10 @@ def _page(side, feature, query):
                 '<input id="limited-input" type="text" maxlength="10" autocomplete="off">'
                 '<p>Length: <output id="input-count">0</output> / 10</p>'
                 '<p class="subtle">This synthetic limit is a fixture contract, not a live product requirement.</p></section>')
+    session = f'<p id="session-state" data-qa-dynamic>Signed in as {esc(signed_in)}</p>' if signed_in else ''
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{title} | Synthetic QA demo</title><style>{_CSS}</style></head>
 <body data-qa-demo="{DEMO_MARKER}" data-qa-environment="{side}" data-qa-feature="{feature or 'home'}">
-<header><p class="subtle">Local synthetic QA fixture</p><nav id="site-nav" aria-label="Main">{links}</nav>{required}</header>
+<header><p class="subtle">Local synthetic QA fixture</p><nav id="site-nav" aria-label="Main">{links}</nav>{required}{session}</header>
 <main id="main-content"><h1>{title}</h1>{body}</main><footer class="subtle">Synthetic fixture. No external requests or production data.</footer>
 <script>
 const toggle = document.getElementById('safe-toggle');
@@ -201,6 +218,26 @@ def handle_demo(handler, path):
         else:
             _respond(handler, 405, '{"error":"method_not_allowed"}')
         return True
+    if len(parts) == 3 and parts[2] == "login":
+        if method in {"GET", "HEAD"}:
+            _respond(handler, 200, _login_page(side), "text/html; charset=utf-8")
+        elif method == "POST":
+            length = int(handler.headers.get("Content-Length") or 0)
+            form = parse_qs(handler.rfile.read(min(length, 4096)).decode("utf-8", "replace"), keep_blank_values=True)
+            account, password = form.get("id", [""])[0][:50], form.get("pw", [""])[0]
+            if account and password == "demo-pass":
+                handler.send_response(303)
+                handler.send_header("Location", f"/demo/{side}/")
+                handler.send_header("Set-Cookie", f"demo_session_{side}={html.escape(account, quote=True)}; Path=/demo/{side}/; HttpOnly; SameSite=Lax")
+                handler.send_header("Content-Length", "0")
+                handler.send_header("Connection", "close")
+                handler.end_headers()
+                handler.close_connection = True
+            else:
+                _respond(handler, 200, _login_page(side, error=True), "text/html; charset=utf-8")
+        else:
+            _respond(handler, 405, '{"error":"method_not_allowed"}')
+        return True
     if method not in {"GET", "HEAD"}:
         _respond(handler, 405, '{"error":"method_not_allowed"}')
         return True
@@ -212,6 +249,12 @@ def handle_demo(handler, path):
     if feature not in {"", "search", "notice", "detail", "input"}:
         _respond(handler, 404, '{"error":"demo_route_not_found"}')
         return True
-    _respond(handler, 200, _page(side, feature, parse_qs(parsed.query, keep_blank_values=True)),
+    cookies = {}
+    for chunk in (handler.headers.get("Cookie") or "").split(";"):
+        name, _, value = chunk.strip().partition("=")
+        if name:
+            cookies[name] = value
+    _respond(handler, 200, _page(side, feature, parse_qs(parsed.query, keep_blank_values=True),
+                                 signed_in=cookies.get(f"demo_session_{side}") or None),
              "text/html; charset=utf-8")
     return True

@@ -1,4 +1,4 @@
-"""Web QA Comparator: local HTTP UI and durable scan/review lifecycle.
+"""VISANG QA AI (Web QA Comparator): local HTTP UI and durable scan/review lifecycle.
 
 The crawler, Playwright observers and Pillow comparison evolve the previous MVP.
 Start with python app.py. No scan starts until requested in the local UI.
@@ -35,15 +35,26 @@ def csv_safe(value):
     return value
 
 
+def _with_triage(job):
+    """Legacy reports get the same deterministic triage on read; verdicts are untouched."""
+    report = (job or {}).get('report') if isinstance(job, dict) else None
+    if isinstance(report, dict) and isinstance(report.get('results'), list) and any(
+            isinstance(row, dict) and 'triage' not in row for row in report['results']):
+        from qa.triage import apply_triage
+        apply_triage(report)
+    return job
+
+
 def csv_report(job):
     output = io.StringIO(newline='')
     writer = csv.writer(output)
-    writer.writerow(['실행 ID', '실행 담당자', '페이지', '영역', '자동 상태', '분류', '차이율(%)',
+    writer.writerow(['실행 ID', '실행 담당자', '페이지', '영역', '자동 상태', '검수 분류', '분류 사유', '분류', '차이율(%)',
                      '기준 URL', '비교 URL', '검수 상태', '검수 버전', '검증식 결과',
                      '테스트 목적', '오류 대분류', '세부 유형', '심각도', '고유 발견 ID', '회귀 구분', '연결 이슈'])
     for row in (job.get('report') or {}).get('results', []):
         writer.writerow([csv_safe(value) for value in (
             job['id'], job.get('operatorId'), row.get('key'), row.get('region_id'), row.get('status'),
+            (row.get('triage') or {}).get('bucket', ''), (row.get('triage') or {}).get('label', ''),
             ' | '.join(row.get('flags', [])), (row.get('visual') or {}).get('differencePercent'),
             (row.get('baseline') or {}).get('url'), (row.get('candidate') or {}).get('url'),
             (row.get('review') or {}).get('status', 'UNREVIEWED'),
@@ -130,8 +141,10 @@ class JobService:
         with self.lock:
             if run_id in self.jobs:
                 # Copy before serializing so the HTTP thread sees a consistent snapshot.
-                return redact(json.loads(json.dumps(self.jobs[run_id])))
-            return self.store.get(run_id)
+                job = redact(json.loads(json.dumps(self.jobs[run_id])))
+            else:
+                job = self.store.get(run_id)
+        return _with_triage(job)
 
     def list(self):
         saved = {item['id']: item for item in self.store.list()}
@@ -498,7 +511,7 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     port = int(os.environ.get('PORT', '3000'))
     server = Server(('127.0.0.1', port))
-    print(f'Web QA Comparator {__version__}: {server.base_origin}', flush=True)
+    print(f'VISANG QA AI {__version__}: {server.base_origin}', flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
