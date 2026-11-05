@@ -385,7 +385,13 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith('/demo/') and handle_demo(self, path):
                 return
             static = {'/': ('index.html', 'text/html'), '/index.html': ('index.html', 'text/html'),
-                      '/app.js': ('app.js', 'text/javascript'), '/styles.css': ('styles.css', 'text/css')}
+                      '/app.js': ('app.js', 'text/javascript'), '/styles.css': ('styles.css', 'text/css'),
+                      '/m_dashboard.html': ('m_dashboard.html', 'text/html'),
+                      '/m_project_settings.html': ('m_project_settings.html', 'text/html'),
+                      '/m_workspace.css': ('m_workspace.css', 'text/css'),
+                      '/m_workspace.js': ('m_workspace.js', 'text/javascript'),
+                      '/m_project_settings.js': ('m_project_settings.js', 'text/javascript'),
+                      '/m_project_settings.css': ('m_project_settings.css', 'text/css')}
             if path in static:
                 name, mime = static[path]
                 return self.send_bytes(200, (PUBLIC / name).read_bytes(), mime + '; charset=utf-8')
