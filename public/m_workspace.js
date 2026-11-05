@@ -1,5 +1,4 @@
 ﻿const $ = selector => document.querySelector(selector);
-const STORE = 'm_qa_projects_v1';
 const TYPES = {comparison:'환경 비교',single:'단일 환경',regression:'회귀',conditional:'조건 기반 UI'};
 const STATES = {running:'실행 중',awaiting_auth:'로그인 대기',done:'완료',cancelled:'중단',error:'오류'};
 const STATUSES = ['PASS','FAIL','DIFF','REVIEW','SKIP','BLOCKED','ERROR'];

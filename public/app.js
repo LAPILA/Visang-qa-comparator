@@ -67,10 +67,8 @@ async function api(path, { method = 'GET', body, signal } = {}) {
 
 function profileById(id) { return state.profiles.find(profile => profile.id === id); }
 function profileLabel(id) { return profileById(id)?.label || id || '사용자 지정'; }
-function localProjects() {
-  try { const value = JSON.parse(localStorage.getItem('m_qa_projects_v1') || '[]'); return Array.isArray(value) ? value : []; }
-  catch { return []; }
-}
+let dbProjects = [];
+function localProjects() { return dbProjects; }
 function selectedProject() { return localProjects().find(project => project.id === $('#projectId').value); }
 function registeredEnvironments() {
   const project = selectedProject();
@@ -773,7 +771,10 @@ $('#continueBtn').addEventListener('click', async () => {
 $('#refreshHistory').addEventListener('click', async () => { try { await refreshHistory(); const active = state.jobs.find(job => ['running', 'awaiting_auth'].includes(job.state)); if (active) { state.activeId = active.id; updateProgress(active); startPolling(active.id); updateStartButton(); } } catch (error) { showError(error.message); } });
 $('#profileId').addEventListener('change', () => { $('#projectId').value = ''; applyProfile(); });
 $('#projectId').addEventListener('change', chooseProject);
-window.addEventListener('pageshow', () => { const previous = $('#projectId').value; populateProjects(previous); if (previous && !$('#projectId').value) applyProfile(); });
+window.addEventListener('pageshow', async () => {
+  try { const previous = $('#projectId').value; dbProjects = (await api('/api/projects')).projects; populateProjects(previous); if (previous && !$('#projectId').value) applyProfile(); }
+  catch (error) { showError(error.message); }
+});
 $('#testType').addEventListener('change', updateTestType);
 $('#crawlScope').addEventListener('change', updateCrawlScopeHint);
 for (const side of ['baseline', 'candidate']) {
@@ -796,6 +797,8 @@ async function init() {
     const bootstrap = await api('/api/bootstrap');
     state.token = bootstrap.sessionToken || '';
     state.profiles = Array.isArray(bootstrap.profiles) ? bootstrap.profiles : [];
+    try { dbProjects = (await api('/api/projects')).projects; }
+    catch (error) { dbProjects = []; showError(`프로젝트 DB: ${error.message}`); }
     populateProjects();
     const select = $('#profileId'); select.replaceChildren();
     for (const profile of state.profiles) select.append(el('option', { value: profile.id, text: profile.label || profile.id, disabled: Boolean(profile.disabled) }));

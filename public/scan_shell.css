@@ -1,0 +1,20 @@
+.qa-sidebar{position:fixed;inset:0 auto 0 0;width:232px;background:#fff;border-right:1px solid #e8eaf3;padding:30px 18px;display:flex;flex-direction:column;z-index:2;font-family:Arial,'Malgun Gothic',sans-serif}
+.qa-sidebar a{text-decoration:none}
+.qa-brand{display:flex;align-items:center;gap:10px;color:#30374e;font-size:23px;font-weight:800;letter-spacing:-1px;padding:0 12px 32px}
+.qa-brand span{display:grid;place-items:center;background:#6551e8;color:#fff;border-radius:10px;width:36px;height:36px;flex:none}
+.qa-nav-caption{color:#a1a8b8;letter-spacing:2px;font-size:10px;padding-left:15px;margin:10px 0}
+.qa-sidebar nav{display:grid;gap:6px}
+.qa-sidebar nav a{padding:12px 15px;border-radius:9px;color:#758098;font-size:13px;font-weight:600}
+.qa-sidebar nav a:hover,.qa-sidebar nav a.active{color:#6551e8;background:#f0edff}
+.qa-side-note{margin-top:auto;background:#f6f3ff;padding:16px;border-radius:12px;font-size:12px;color:#655d8a;line-height:1.6}
+.qa-side-note p{margin:6px 0 0}
+.qa-shell{margin-left:232px;min-height:100vh}
+.qa-topbar{height:76px;background:#fff;border-bottom:1px solid #e8eaf3;padding:0 38px;display:flex;align-items:center;justify-content:space-between;color:#8e97aa;font:12px Arial,'Malgun Gothic',sans-serif}
+.qa-topbar strong{color:#4d556c}
+.qa-local-pill{padding:6px 10px;border-radius:6px;background:#ecf8f4;color:#288b70}
+.qa-shell .layout{max-width:1500px;padding:38px;margin:0 auto}
+.qa-page-head{margin-bottom:24px}
+.qa-page-head .eyebrow{color:#8a79dc;font-weight:700;letter-spacing:2px;margin:0}
+.qa-page-head h1{font-size:29px;letter-spacing:-1px;margin:3px 0 6px}
+.qa-page-head .subtitle{margin:0;color:#8d96a9;font-size:13px;line-height:1.5}
+@media(max-width:700px){.qa-sidebar{position:static;width:auto;padding:16px;gap:8px}.qa-brand{padding:0}.qa-sidebar nav{display:flex;overflow:auto}.qa-sidebar nav a{white-space:nowrap}.qa-nav-caption,.qa-side-note{display:none}.qa-shell{margin-left:0}.qa-topbar{height:50px;padding:0 18px}.qa-shell .layout{padding:22px 16px}.qa-page-head h1{font-size:25px}}

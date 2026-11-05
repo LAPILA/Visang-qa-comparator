@@ -1,7 +1,6 @@
 const $ = selector => document.querySelector(selector);
 const form = $('#ruleForm');
 const KEY = 'm_qa_rules_v1';
-const PROJECTS = 'm_qa_projects_v1';
 const KINDS = new Set(['visible','count','text_length','overflow','attribute']);
 const ATTRIBUTES = /^(?:id|class|role|title|type|disabled|hidden|maxlength|aria-[a-z-]+|data-[a-z0-9-]+)$/;
 let projects = [], rules = [], selectedId = null;
@@ -100,10 +99,7 @@ function save() {
   selectedId = rule.id; fill(rule); render(); message('검사 규칙을 이 브라우저에 저장했습니다.'); return rule;
 }
 
-projects = read(PROJECTS).filter(item => item?.id && item?.name);
 rules = read(KEY).filter(item => item?.id && item?.projectId && item?.condition);
-for (const project of projects) { const option = document.createElement('option'); option.value = project.id; option.textContent = project.name; $('#projectId').append(option); }
-if (projects.length) $('#projectId').value = projects[0].id;
 $('#projectId').addEventListener('change', () => { selectedId = null; fill(null); render(); });
 $('#newRule').addEventListener('click', () => { selectedId = null; fill(null); render(); form.elements.name.focus(); });
 form.elements.kind.addEventListener('change', syncKind);
@@ -121,4 +117,16 @@ $('#applyRules').addEventListener('click', () => {
   try { sessionStorage.setItem('m_pending_rules', JSON.stringify({ projectId: projectId(), conditions })); location.href = '/'; }
   catch { message('검사 화면으로 규칙을 전달하지 못했습니다.', true); }
 });
-fill(null); render(); message(projects.length ? '프로젝트를 선택하고 규칙을 등록하세요.' : '등록된 프로젝트가 없습니다. 프로젝트 설정에서 먼저 만드세요.');
+async function loadProjects() {
+  try {
+    const response = await fetch('/api/projects', { cache: 'no-store' });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '프로젝트 목록을 불러오지 못했습니다.');
+    projects = data.projects;
+    $('#projectId').replaceChildren();
+    for (const project of projects) { const option = document.createElement('option'); option.value = project.id; option.textContent = project.name; $('#projectId').append(option); }
+    if (projects.length) $('#projectId').value = projects[0].id;
+    fill(null); render(); message(projects.length ? '프로젝트를 선택하고 규칙을 등록하세요.' : '등록된 프로젝트가 없습니다. 프로젝트 설정에서 먼저 만드세요.');
+  } catch (error) { message(error.message, true); }
+}
+loadProjects();

@@ -15,12 +15,14 @@ import secrets
 import threading
 import time
 import uuid
+import psycopg
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from qa import __version__
 from qa.config import parse_options, profiles, validate_url
+from qa import projects_db
 from qa.store import ReportStore, ReviewConflict, RunDirectoryLease, redact, timestamp
 
 ROOT = Path(__file__).resolve().parent
@@ -386,6 +388,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             static = {'/': ('index.html', 'text/html'), '/index.html': ('index.html', 'text/html'),
                       '/app.js': ('app.js', 'text/javascript'), '/styles.css': ('styles.css', 'text/css'),
+                      '/scan_shell.css': ('scan_shell.css', 'text/css'),
                       '/m_dashboard.html': ('m_dashboard.html', 'text/html'),
                       '/m_project_settings.html': ('m_project_settings.html', 'text/html'),
                       '/m_workspace.css': ('m_workspace.css', 'text/css'),
@@ -408,6 +411,9 @@ class Handler(BaseHTTPRequestHandler):
                                                    {'id': 'regression', 'label': '회귀 테스트'},
                                                    {'id': 'conditional', 'label': '조건 기반 UI QA'}]},
                                           redact_payload=False)
+            if path == '/api/projects':
+                projects_db.initialize()
+                return self.json_response(200, {'projects': projects_db.list_projects()})
             if path == '/api/scans':
                 return self.json_response(200, {'scans': self.server.service.list()})
             if path.startswith('/api/scans/') and path.endswith('/inventory.csv'):
@@ -449,6 +455,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.json_response(404, {'error': '이미지를 찾을 수 없습니다.'})
                 return self.send_bytes(200, target.read_bytes(), 'image/png')
             return self.json_response(404, {'error': '찾을 수 없는 경로입니다.'})
+        except psycopg.Error:
+            return self.json_response(503, {'error': '프로젝트 DB에 연결하지 못했습니다.'})
         except (ValueError, OSError) as exc:
             return self.json_response(400, {'error': str(exc)})
 
@@ -477,6 +485,12 @@ class Handler(BaseHTTPRequestHandler):
             data = self._parse_body()
             if self.server.service.closing:
                 return self.json_response(503, {'error': '서버가 종료 중입니다. 새 서버에서 다시 시도하세요.'})
+            if path == '/api/projects/save':
+                projects_db.initialize()
+                return self.json_response(200, {'project': projects_db.save_project(data)})
+            if path == '/api/projects/delete':
+                projects_db.initialize()
+                return self.json_response(200, {'deleted': projects_db.delete_project(data.get('id', ''))})
             if path == '/api/scans':
                 options = parse_options(data, self.server.base_origin)
                 run_id = self.server.service.start(options)
@@ -500,6 +514,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.json_response(403, {'error': str(exc)})
         except ReviewConflict as exc:
             return self.json_response(409, {'error': str(exc)})
+        except psycopg.Error:
+            return self.json_response(503, {'error': '프로젝트 DB에 연결하지 못했습니다.'})
         except (ValueError, TypeError, KeyError, OSError) as exc:
             return self.json_response(400, {'error': str(exc)})
 

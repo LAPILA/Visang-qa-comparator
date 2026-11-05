@@ -5,14 +5,27 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Web QA Comparator · QA Workspace</title>
   <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/scan_shell.css" />
   <script type="module" src="/app.js"></script>
 </head>
 <body>
+  <aside class="qa-sidebar" aria-label="주 메뉴">
+    <a class="qa-brand" href="/m_dashboard.html"><span>Q</span> QA Workspace</a>
+    <p class="qa-nav-caption">WORKSPACE</p>
+    <nav>
+      <a href="/m_dashboard.html">▦ &nbsp; 대시보드</a>
+      <a href="/m_project_settings.html">▣ &nbsp; 프로젝트 설정</a>
+      <a href="/m_rules.html">◇ &nbsp; 검사 규칙</a>
+      <a class="active" href="/" aria-current="page">▶ &nbsp; 검사 실행·결과</a>
+    </nav>
+    <div class="qa-side-note"><strong>검사 실행·결과</strong><p>검사 설정, 진행 상태, 증거와 검수 결과를 확인합니다.</p></div>
+  </aside>
+  <div class="qa-shell">
+    <header class="qa-topbar"><span>워크스페이스 / <strong>검사 실행·결과</strong></span><span class="qa-local-pill">● 로컬 QA</span></header>
   <main class="layout">
-    <header class="page-header">
-      <nav aria-label="워크스페이스 화면"><a href="/m_dashboard.html">대시보드</a> · <a href="/m_project_settings.html">프로젝트 설정</a> · <a href="/m_rules.html">검사 규칙</a> · <a href="/">검사 실행</a></nav>
-      <div class="brand"><span class="brand-mark" aria-hidden="true">Q</span><div><p class="eyebrow">WEB QA COMPARATOR</p><h1>QA 워크스페이스</h1></div></div>
-      <span class="version-pill">LOCAL · MVP</span>
+    <header class="qa-page-head">
+      <p class="eyebrow">SCAN &amp; REVIEW</p>
+      <h1>검사 실행·결과</h1>
       <p class="subtitle">두 환경의 화면과 기능을 확인하고, 발견한 차이를 근거와 함께 검수합니다.</p>
     </header>
 
@@ -24,7 +37,7 @@
         <div class="section-heading"><div><p class="eyebrow">NEW RUN</p><h2 id="settingsTitle">검사 설정</h2></div><span class="mini-badge">안전한 범위부터</span></div>
         <form id="scanForm">
           <label class="field"><span>프로젝트 선택</span><select id="projectId"><option value="">프로젝트 선택 안 함</option></select></label>
-          <p class="helper">프로젝트를 선택하면 등록한 환경을 아래 A/B 환경 주소에서 고를 수 있습니다. 프로젝트 설정은 이 브라우저에 저장됩니다.</p>
+          <p class="helper">프로젝트를 선택하면 등록한 환경을 아래 A/B 환경 주소에서 고를 수 있습니다. 프로젝트 설정은 로컬 PostgreSQL에 저장됩니다.</p>
           <div class="two-columns">
             <label class="field"><span>제품 · 검사 프로필</span><select id="profileId" name="profileId" required><option value="">프로필 불러오는 중…</option></select></label>
             <label class="field"><span>실행 담당자</span><input id="operatorId" name="operatorId" required maxlength="50" placeholder="예: qa-a" autocomplete="off" /></label>
@@ -156,5 +169,6 @@
     </section>
     <footer>Web QA Comparator · 근거가 있는 판정, 재현 가능한 검수</footer>
   </main>
+  </div>
 </body>
 </html>
