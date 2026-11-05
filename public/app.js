@@ -815,6 +815,19 @@ async function init() {
         showSuccess('프로젝트의 첫 번째 환경을 A, 두 번째 환경을 B로 불러왔습니다. 담당자 ID와 검사 조건을 입력한 뒤 시작하세요.');
       }
     } catch { /* Invalid browser draft is ignored. */ }
+    try {
+      const pending = JSON.parse(sessionStorage.getItem('m_pending_rules') || 'null');
+      sessionStorage.removeItem('m_pending_rules');
+      if (pending && [...$('#projectId').options].some(option => option.value === pending.projectId) &&
+          Array.isArray(pending.conditions) && pending.conditions.length) {
+        $('#projectId').value = pending.projectId;
+        chooseProject();
+        $('#testType').value = 'conditional';
+        $('#conditions').value = JSON.stringify(pending.conditions, null, 2);
+        updateTestType();
+        showSuccess('프로젝트와 활성 검사 규칙을 불러왔습니다. A 환경·담당자 ID·선행 조건을 확인한 뒤 검사 시작을 눌러 주세요.');
+      }
+    } catch { /* Invalid browser rules are ignored. */ }
     $('#connectionStatus').textContent = '로컬 서버 연결됨 · 실행 기록 저장';
     updateStartButton();
     await refreshHistory();
