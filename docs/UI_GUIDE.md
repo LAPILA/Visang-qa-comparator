@@ -2,6 +2,22 @@
 
 `public/index.html`·`public/styles.css`의 화면 규칙을 정리한 문서입니다. `app.js`와 브라우저 테스트(`tests/test_ui_*.py`)가 참조하는 **ID·클래스 이름은 그대로 유지**했고, 레이아웃과 스타일만 바꿨습니다. 상태 의미는 [README](../README.md#판정과-저장), 결과 화면 요구사항은 [REQUIREMENTS_AND_GAPS AR04](REQUIREMENTS_AND_GAPS.md)를 따릅니다.
 
+## 페이지 구성 (v0.4 · origin/1105_mia 통합)
+
+세 페이지가 같은 셸(왼쪽 사이드바 + 상단 바)과 같은 `styles.css`·토큰을 씁니다.
+
+| 페이지 | 파일 | 역할 |
+|---|---|---|
+| 대시보드 | `m_dashboard.html` + `m_workspace.js` | 최근 완료 실행의 검수 분류 5타일, 실행 요약 4개, 최근 실행 표(클릭 → `/?run=<id>`로 결과 열기), 7상태 요약 |
+| 프로젝트 설정 | `m_project_settings.html` + `m_project_settings.js` | 프로젝트별 환경(이름·URL) 목록을 브라우저 localStorage(`m_qa_projects_v1`)에 저장, "검사 설정에 적용"으로 실행 화면에 A/B 전달 |
+| 검사 실행·결과 | `index.html` + `app.js` | 기존 4단계 설정·실행 이력·결과 대시보드. 1단계에 프로젝트 선택 추가 |
+
+공통: `theme-boot.js`(그리기 전 테마 적용, 깜빡임 방지), `shell.js`(테마 버튼·사이드바 활성 표시). 대시보드·프로젝트 설정의 원안은 동료 브랜치 `origin/1105_mia`이며, 저장 키와 동작은 그대로 두고 디자인 토큰·검수 분류·테마만 맞췄습니다.
+
+## 테마 (라이트 / 다크 / 시스템)
+
+사이드바 아래 스위치로 고르며 `localStorage.qa_theme`에 저장됩니다. `<html data-theme="light|dark">`가 있으면 그 값, 없으면(시스템) `prefers-color-scheme`을 따릅니다. 다크 값은 `styles.css` 15절 한 곳에만 있고 모든 페이지가 공유합니다.
+
 ## 화면 흐름 (위에서 아래로)
 
 | 순서 | 영역 | 역할 |
@@ -51,10 +67,6 @@
 | ERROR | `--error` / `--error-bg` | 보라 |
 
 상태 배지(`.status.X`), 타일(`.stat.X`), 실행 상태(`.job-state`), 오류 항목(`.error-item.X`)이 전부 같은 변수를 쓰므로 **색을 바꿀 때는 `:root`만 수정**하면 됩니다.
-
-## 다크 테마
-
-OS가 다크 모드면 `prefers-color-scheme: dark`로 `:root` 토큰만 바뀝니다. 별도 토글은 없으며, 배지·타일·버튼 색은 전부 토큰을 쓰므로 자동으로 따라갑니다.
 
 ## 반응형 기준점
 

@@ -63,10 +63,10 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(options['viewport'], {'width': 390, 'height': 844})
 
     def test_numeric_limits_reject_nonfinite_boolean_fraction_and_range(self):
-        for value in (math.nan, math.inf, -math.inf, "NaN", "1e309", True, 1.5, 0, 31, None):
+        for value in (math.nan, math.inf, -math.inf, "NaN", "1e309", True, 1.5, 0, 201, None):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 parse_options(self.custom(maxPages=value), self.origin)
-        for key, value in (("maxActions", 301), ("timeoutSeconds", 14),
+        for key, value in (("maxActions", 1001), ("timeoutSeconds", 14), ("timeoutSeconds", 3601), ("maxDepth", 9),
                            ("actionInterval", 0), ("visualThreshold", float("nan"))):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 parse_options(self.custom(**{key: value}), self.origin)

@@ -423,7 +423,12 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith('/demo/') and handle_demo(self, path):
                 return
             static = {'/': ('index.html', 'text/html'), '/index.html': ('index.html', 'text/html'),
-                      '/app.js': ('app.js', 'text/javascript'), '/styles.css': ('styles.css', 'text/css')}
+                      '/app.js': ('app.js', 'text/javascript'), '/styles.css': ('styles.css', 'text/css'),
+                      '/shell.js': ('shell.js', 'text/javascript'), '/theme-boot.js': ('theme-boot.js', 'text/javascript'),
+                      '/m_dashboard.html': ('m_dashboard.html', 'text/html'),
+                      '/m_project_settings.html': ('m_project_settings.html', 'text/html'),
+                      '/m_workspace.js': ('m_workspace.js', 'text/javascript'),
+                      '/m_project_settings.js': ('m_project_settings.js', 'text/javascript')}
             if path in static:
                 name, mime = static[path]
                 return self.send_bytes(200, (PUBLIC / name).read_bytes(), mime + '; charset=utf-8')
@@ -439,6 +444,9 @@ class Handler(BaseHTTPRequestHandler):
                                           redact_payload=False)
             if path == '/api/scans':
                 return self.json_response(200, {'scans': self.server.service.list()})
+            if path == '/api/credentials':
+                from qa.secrets import credentials_status
+                return self.json_response(200, credentials_status(), redact_payload=False)
             if path.startswith('/api/scans/') and path.endswith('/inventory.csv'):
                 run_id = path.removeprefix('/api/scans/').removesuffix('/inventory.csv')
                 job = self.server.service.get(run_id)
@@ -510,6 +518,15 @@ class Handler(BaseHTTPRequestHandler):
                 options = parse_options(data, self.server.base_origin)
                 run_id = self.server.service.start(options)
                 return self.json_response(202, {'id': run_id})
+            if path == '/api/credentials':
+                # The password is written to the git-ignored secrets file and never echoed, logged or stored in runs.
+                from qa.secrets import save_shared_credentials
+                status = save_shared_credentials(data.get('id'), data.get('pw'))
+                data.clear()
+                return self.json_response(200, status, redact_payload=False)
+            if path == '/api/credentials/clear':
+                from qa.secrets import clear_shared_credentials
+                return self.json_response(200, clear_shared_credentials(), redact_payload=False)
             parts = path.strip('/').split('/')
             if parts == ['api', 'scans', 'delete-finished']:
                 return self.json_response(200, {'removed': self.server.service.delete_finished()})

@@ -71,7 +71,36 @@ async function api(path, { method = 'GET', body, signal } = {}) {
 
 function profileById(id) { return state.profiles.find(profile => profile.id === id); }
 function profileLabel(id) { return profileById(id)?.label || id || '사용자 지정'; }
-function registeredEnvironments() { const entries = profileById($('#profileId').value)?.environments; return Array.isArray(entries) ? entries : []; }
+function localProjects() {
+  try { const value = JSON.parse(localStorage.getItem('m_qa_projects_v1') || '[]'); return Array.isArray(value) ? value : []; }
+  catch { return []; }
+}
+function selectedProject() { return localProjects().find(project => project.id === $('#projectId').value); }
+function registeredEnvironments() {
+  const project = selectedProject();
+  if (project) return (Array.isArray(project.environments) ? project.environments : []).filter(item => item?.id && item?.name && item?.url)
+    .map(item => ({ id: `project:${item.id}`, label: item.name, url: item.url }));
+  const entries = profileById($('#profileId').value)?.environments;
+  return Array.isArray(entries) ? entries : [];
+}
+function populateProjects(preferred = '') {
+  const select = $('#projectId');
+  select.replaceChildren(el('option', { value: '', text: '프로젝트 선택 안 함' }));
+  for (const project of localProjects().filter(item => item?.id && item?.name)) select.append(el('option', { value: project.id, text: project.name }));
+  select.value = [...select.options].some(option => option.value === preferred) ? preferred : '';
+}
+function chooseProject() {
+  const project = selectedProject();
+  if (!project) { applyProfile(); return; }
+  $('#profileId').value = 'custom';
+  applyProfile();
+  const environments = registeredEnvironments();
+  for (const [side, entry] of [['baseline', environments[0]], ['candidate', environments[1]]]) {
+    if (entry) { $(`#${side}EnvironmentId`).value = entry.id; chooseEnvironment(side); }
+  }
+  if (!environments[1]) $('#testType').value = 'single';
+  updateTestType();
+}
 function syncEnvironmentSelection(side) {
   const value = $(`#${side}Url`).value.trim();
   const entry = registeredEnvironments().find(environment => environment.url === value);
@@ -88,7 +117,7 @@ function populateEnvironmentSelectors(profile) {
     const select = $(`#${side}EnvironmentId`);
     select.replaceChildren(el('option', { value: 'custom', text: environments.length ? '직접 입력' : '직접 입력 · 등록 환경 없음' }));
     for (const entry of environments) select.append(el('option', { value: entry.id, text: entry.label || entry.id }));
-    const defaultId = profile[`${side}EnvironmentId`] || profile.defaults?.[`${side}EnvironmentId`];
+    const defaultId = selectedProject() ? null : profile[`${side}EnvironmentId`] || profile.defaults?.[`${side}EnvironmentId`];
     if (environments.some(entry => entry.id === defaultId)) { select.value = defaultId; chooseEnvironment(side); }
     else syncEnvironmentSelection(side);
   }
@@ -190,6 +219,7 @@ function loadRunSettings({ visual = false } = {}) {
   if (!options || typeof options !== 'object') { showError('이 실행에는 원래 설정이 저장되어 있지 않습니다. 검사 설정을 직접 확인해 주세요.'); return; }
   const read = (snake, camel) => options[snake] ?? options[camel];
   const profileId = read('profile_id', 'profileId') || job.profileId;
+  $('#projectId').value = '';
   $('#profileId').value = profileById(profileId) ? profileId : 'custom';
   $('#testType').value = read('test_type', 'testType') || job.testType || job.report?.testType || 'comparison';
   $('#previousRunId').value = '';
@@ -269,11 +299,11 @@ function readArray(id) {
   return value;
 }
 function buildPayload() {
-  const payload = { profileId: $('#profileId').value, operatorId: $('#operatorId').value.trim(), baselineUrl: $('#baselineUrl').value.trim(), baselineName: $('#baselineName').value.trim(), baselineEnvironmentId: $('#baselineEnvironmentId').value, crawlScope: $('#crawlScope').value, testType: $('#testType').value, mode: $('#mode').value, manualLogin: $('#manualLogin').checked };
+  const payload = { profileId: $('#profileId').value, operatorId: $('#operatorId').value.trim(), baselineUrl: $('#baselineUrl').value.trim(), baselineName: $('#baselineName').value.trim(), baselineEnvironmentId: $('#baselineEnvironmentId').value.startsWith('project:') ? 'custom' : $('#baselineEnvironmentId').value, crawlScope: $('#crawlScope').value, testType: $('#testType').value, mode: $('#mode').value, manualLogin: $('#manualLogin').checked };
   if (!payload.operatorId) throw new Error('실행 담당자를 입력해 주세요.');
   if (!payload.baselineName) throw new Error('A 환경 이름을 입력해 주세요.');
   if (!safeUrl(payload.baselineUrl)) throw new Error('아이디·비밀번호를 포함하지 않은 http 또는 https 대상 URL을 입력해 주세요.');
-  if (payload.testType === 'comparison') { payload.candidateUrl = $('#candidateUrl').value.trim(); payload.candidateName = $('#candidateName').value.trim(); payload.candidateEnvironmentId = $('#candidateEnvironmentId').value; payload.pairStartPages = $('#pairStartPages').checked; payload.routeEquivalence = $('#routeEquivalence').checked; if (!safeUrl(payload.candidateUrl)) throw new Error('올바른 비교 B URL을 입력해 주세요.'); if (!payload.candidateName) throw new Error('B 환경 이름을 입력해 주세요.'); }
+  if (payload.testType === 'comparison') { payload.candidateUrl = $('#candidateUrl').value.trim(); payload.candidateName = $('#candidateName').value.trim(); payload.candidateEnvironmentId = $('#candidateEnvironmentId').value.startsWith('project:') ? 'custom' : $('#candidateEnvironmentId').value; payload.pairStartPages = $('#pairStartPages').checked; payload.routeEquivalence = $('#routeEquivalence').checked; if (!safeUrl(payload.candidateUrl)) throw new Error('올바른 비교 B URL을 입력해 주세요.'); if (!payload.candidateName) throw new Error('B 환경 이름을 입력해 주세요.'); }
   if (payload.testType === 'regression') { payload.previousRunId = $('#previousRunId').value; if (!payload.previousRunId) throw new Error('회귀 비교의 기준이 될 과거 실행을 선택해 주세요.'); }
   if (payload.testType === 'conditional') { payload.conditions = readArray('conditions'); if (!payload.conditions.length) throw new Error('조건 기반 검사에 사용할 conditions를 한 개 이상 입력해 주세요.'); }
   for (const name of ['maxPages', 'maxDepth', 'maxActions', 'timeoutSeconds', 'visualThreshold']) payload[name] = Number($(`#${name}`).value);
@@ -823,21 +853,50 @@ async function deleteRun(job) {
 }
 $('#refreshHistory').addEventListener('click', async () => { try { await refreshHistory(); const active = state.jobs.find(job => ['running', 'awaiting_auth'].includes(job.state)); if (active) { state.activeId = active.id; updateProgress(active); startPolling(active.id); updateStartButton(); } } catch (error) { showError(error.message); } });
 function updateLoginFields() { const enabled = $('#loginEnabled').checked; for (const node of document.querySelectorAll('#loginFields input')) node.disabled = !enabled; $('#loginFields').classList.toggle('disabled', !enabled); if (enabled) $('#manualLogin').checked = false; }
+const credentialState = { configured: false };
+async function refreshCredentials() {
+  try {
+    const status = await api('/api/credentials');
+    credentialState.configured = Boolean(status.configured);
+    $('#credentialState').textContent = status.configured ? '저장됨' : '없음';
+    $('#credentialState').className = `job-state ${status.configured ? 'done' : 'error'}`;
+    $('#credentialText').textContent = status.configured ? `공용 테스트 계정 ${status.maskedId} · ${status.source === 'environment' ? '환경변수' : '비밀 파일'}에서 사용` : '저장된 계정이 없습니다. 아래에 ID·비밀번호를 넣고 저장하세요.';
+    $('#clearCredential').disabled = !status.configured || status.source === 'environment';
+    autoEnableLogin();
+  } catch { $('#credentialText').textContent = '계정 상태를 확인하지 못했습니다.'; }
+}
+function autoEnableLogin() {
+  const product = !['synthetic-demo', 'custom', ''].includes($('#profileId').value);
+  if (credentialState.configured && product && !$('#manualLogin').checked && !$('#loginEnabled').checked) { $('#loginEnabled').checked = true; updateLoginFields(); }
+}
+$('#saveCredential').addEventListener('click', async () => {
+  const id = $('#credentialId').value.trim(), pw = $('#credentialPw').value;
+  if (!id || !pw) { showError('테스트 계정 ID와 비밀번호를 모두 입력하세요.'); return; }
+  $('#saveCredential').disabled = true;
+  try { await api('/api/credentials', { method: 'POST', body: { id, pw } }); $('#credentialPw').value = ''; $('#credentialId').value = ''; clearError(); showSuccess('공용 테스트 계정을 이 PC에 저장했습니다. 이제 제품 프로필 검사에서 자동 로그인합니다.'); await refreshCredentials(); }
+  catch (error) { showError(error.message); } finally { $('#saveCredential').disabled = false; }
+});
+$('#clearCredential').addEventListener('click', async () => {
+  if (!window.confirm('저장된 공용 테스트 계정을 이 PC에서 삭제할까요?')) return;
+  try { await api('/api/credentials/clear', { method: 'POST', body: {} }); showSuccess('저장된 테스트 계정을 삭제했습니다.'); await refreshCredentials(); } catch (error) { showError(error.message); }
+});
 function updateSafetyWarning() { visible($('#safetyWarning'), $('#safetyLevel').value === 'test_account'); }
 $('#safetyLevel').addEventListener('change', updateSafetyWarning);
 $('#loginEnabled').addEventListener('change', updateLoginFields);
 $('#fullCheckPreset').addEventListener('click', () => {
   $('#crawlScope').value = 'same_origin_readonly'; $('#mode').value = 'combined';
-  $('#maxPages').value = 30; $('#maxDepth').value = 3; $('#maxActions').value = 200; $('#timeoutSeconds').value = 900; $('#visualThreshold').value = 8;
+  $('#maxPages').value = 60; $('#maxDepth').value = 4; $('#maxActions').value = 400; $('#timeoutSeconds').value = 2400; $('#visualThreshold').value = 8;
   $('#observationMode').value = 'lenient'; $('#smokeActions').checked = true; $('#xhrPolicy').value = 'allow_allowed_hosts'; $('#safetyLevel').value = 'test_account'; updateSafetyWarning(); $('#autoDismiss').checked = true;
   $('#loginEnabled').checked = true; $('#manualLogin').checked = false; updateLoginFields(); $('#loginDetails').open = true;
   if (!$('#entrySelector').value.trim()) { $('#entrySelector').value = 'button, a, [role=button]'; $('#entryText').value = /mobile/.test($('#profileId').value) ? '모바일웹으로 계속하기|모바일 웹으로 이동하기' : 'PC버전으로 계속하기|PC 버전으로 계속하기'; $('#entryUrlPattern').value = '*coverPage*'; $('#entrySides').value = 'both'; }
   updateCrawlScopeHint(); clearError();
-  showSuccess('전체 기능 자동 체크 프리셋을 적용했습니다: 로그인 후 환경 내부 링크 전체 탐색(최대 30페이지·깊이 3), 테스트 계정 수준으로 버튼·폼 제출까지 스모크 실행, 사소한 시각 차이(8% 미만) PASS, 콘솔·리소스 오류는 "기타"로 분리. 회원탈퇴·비밀번호 변경·로그아웃·결제·회원가입만 차단됩니다. 검사 시작을 눌러 주세요.');
+  showSuccess('전체 기능 자동 체크 프리셋을 적용했습니다: 로그인 후 환경 내부 링크 전체 탐색(최대 60페이지·깊이 4·동작 400·40분), 테스트 계정 수준으로 버튼·폼 제출까지 스모크 실행, 사소한 시각 차이(8% 미만) PASS, 콘솔·리소스 오류는 "기타"로 분리. 회원탈퇴·비밀번호 변경·로그아웃·결제·회원가입만 차단됩니다. 검사 시작을 눌러 주세요.');
 });
 $('#manualLogin').addEventListener('change', () => { if ($('#manualLogin').checked) { $('#loginEnabled').checked = false; updateLoginFields(); } });
 updateLoginFields();
-$('#profileId').addEventListener('change', applyProfile);
+$('#profileId').addEventListener('change', () => { $('#projectId').value = ''; applyProfile(); autoEnableLogin(); });
+$('#projectId').addEventListener('change', chooseProject);
+window.addEventListener('pageshow', () => { const previous = $('#projectId').value; populateProjects(previous); if (previous && !$('#projectId').value) applyProfile(); });
 $('#testType').addEventListener('change', updateTestType);
 $('#crawlScope').addEventListener('change', updateCrawlScopeHint);
 for (const side of ['baseline', 'candidate']) {
@@ -860,14 +919,32 @@ async function init() {
     const bootstrap = await api('/api/bootstrap');
     state.token = bootstrap.sessionToken || '';
     state.profiles = Array.isArray(bootstrap.profiles) ? bootstrap.profiles : [];
+    populateProjects();
     const select = $('#profileId'); select.replaceChildren();
     for (const profile of state.profiles) select.append(el('option', { value: profile.id, text: profile.label || profile.id, disabled: Boolean(profile.disabled) }));
     const first = state.profiles.find(profile => !profile.disabled && /demo/i.test(profile.id)) || state.profiles.find(profile => !profile.disabled);
     if (first) { select.value = first.id; applyProfile(); }
+    try {
+      const draft = JSON.parse(sessionStorage.getItem('m_pending_project') || 'null');
+      sessionStorage.removeItem('m_pending_project');
+      if (draft && typeof draft.baselineUrl === 'string' && state.profiles.some(profile => profile.id === 'custom' && !profile.disabled)) {
+        if (draft.projectId && [...$('#projectId').options].some(option => option.value === draft.projectId)) $('#projectId').value = draft.projectId;
+        $('#profileId').value = 'custom';
+        applyProfile();
+        for (const id of ['baselineUrl', 'candidateUrl', 'baselineName', 'candidateName', 'testType']) {
+          if (typeof draft[id] === 'string' && $(`#${id}`)) $(`#${id}`).value = draft[id];
+        }
+        syncEnvironmentSelection('baseline'); syncEnvironmentSelection('candidate'); updateTestType();
+        showSuccess('프로젝트의 첫 번째 환경을 A, 두 번째 환경을 B로 불러왔습니다. 담당자와 검사 조건을 확인한 뒤 시작하세요.');
+      }
+    } catch { /* Invalid browser draft is ignored. */ }
     $('#connectionStatus').textContent = `로컬 서버 연결됨 · 실행 기록 저장 · 엔진 v${bootstrap.version || "?"}`;
     if (bootstrap.version) $("#versionPill").textContent = `v${bootstrap.version} · LOCAL`;
     updateStartButton();
+    await refreshCredentials();
     await refreshHistory();
+    const requestedRun = new URLSearchParams(location.search).get('run');
+    if (requestedRun && state.jobs.some(job => job.id === requestedRun)) await loadJob(requestedRun, { scroll: true });
     const active = state.jobs.find(job => ['running', 'awaiting_auth'].includes(job.state));
     if (active) await loadJob(active.id, { scroll: false });
   } catch (error) { $('#connectionStatus').textContent = '서버 연결을 확인해 주세요'; showError(error.message); }

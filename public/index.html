@@ -5,20 +5,25 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>VISANG QA AI · 웹 QA 워크스페이스</title>
   <link rel="stylesheet" href="/styles.css" />
+  <script src="/theme-boot.js"></script>
+  <script type="module" src="/shell.js"></script>
   <script type="module" src="/app.js"></script>
 </head>
-<body>
-  <!-- 상단 바: 브랜드 + 섹션 바로가기 -->
-  <nav class="topbar" aria-label="주요 영역">
-    <a class="topbar-brand" href="#top"><span class="brand-mark" aria-hidden="true">V</span><span>VISANG <em>QA AI</em></span></a>
-    <div class="topbar-links">
-      <a href="#settingsTitle">검사 설정</a>
-      <a href="#historyTitle">실행 이력</a>
-      <a href="#resultTitle">검사 결과</a>
-    </div>
-    <span class="version-pill" id="versionPill">v0.4 · LOCAL</span>
-  </nav>
-
+<body data-page="run">
+<div class="app">
+  <aside class="sidebar">
+    <a class="brand-link" href="/m_dashboard.html"><span class="brand-mark" aria-hidden="true">V</span><span>VISANG <em>QA AI</em></span></a>
+    <p class="nav-caption">WORKSPACE</p>
+    <nav aria-label="주 메뉴">
+      <a href="/m_dashboard.html" data-page="dashboard"><span class="nav-icon">▦</span>대시보드</a>
+      <a href="/m_project_settings.html" data-page="projects"><span class="nav-icon">▣</span>프로젝트 설정</a>
+      <a href="/" data-page="run"><span class="nav-icon">▶</span>검사 실행·결과</a>
+    </nav>
+    <div class="side-note"><strong>검사 결과 읽기</strong>실행 완료와 품질 판정은 다릅니다. 검수 분류(이슈·대인체크·재검)와 증거를 함께 확인하세요.</div>
+    <div class="theme-switch" role="group" aria-label="테마"><button type="button" data-theme="light">☀ 라이트</button><button type="button" data-theme="dark">☾ 다크</button><button type="button" data-theme="system">◐ 시스템</button></div>
+  </aside>
+  <div class="shell">
+  <nav class="topbar" aria-label="현재 위치"><span>워크스페이스 / <strong>검사 실행·결과</strong></span><span class="topbar-links"><a href="#settingsTitle">검사 설정</a><a href="#historyTitle">실행 이력</a><a href="#resultTitle">검사 결과</a></span><span class="version-pill" id="versionPill">v0.4 · LOCAL</span></nav>
   <main class="layout" id="top">
     <header class="page-header">
       <div class="hero">
@@ -54,6 +59,11 @@
           <!-- STEP 1 · 대상 -->
           <fieldset class="step">
             <legend><span class="step-no">1</span>무엇을 검사할까요</legend>
+            <div class="two-columns">
+              <label class="field"><span>프로젝트 · 브라우저에 저장된 환경 묶음</span><select id="projectId"><option value="">프로젝트 선택 안 함</option></select></label>
+              <label class="field"><span>&nbsp;</span><a class="secondary-button" href="/m_project_settings.html">프로젝트 설정 열기 →</a></label>
+            </div>
+            <p class="helper">프로젝트를 고르면 첫 환경이 A, 둘째 환경이 B로 들어갑니다. 등록 제품(비바샘 4종)은 아래 프로필에서 바로 고를 수 있습니다.</p>
             <div class="two-columns">
               <label class="field"><span>제품 · 검사 프로필</span><select id="profileId" name="profileId" required><option value="">프로필 불러오는 중…</option></select></label>
               <label class="field"><span>실행 담당자</span><input id="operatorId" name="operatorId" required maxlength="50" placeholder="예: qa-a" autocomplete="off" /></label>
@@ -127,13 +137,13 @@
             <legend><span class="step-no">3</span>어디까지 검사할까요</legend>
             <div class="option-grid">
               <label class="field"><span>검사 모드</span><select id="mode" name="mode"><option value="combined">화면 + 등록된 기능</option><option value="visual">화면 비교</option><option value="discovery">탐색만 · 화면 비교 안 함</option></select></label>
-              <label class="field"><span>환경당 최대 페이지</span><input id="maxPages" name="maxPages" type="number" min="1" max="30" value="10" required /></label>
-              <label class="field"><span>최대 탐색 깊이</span><input id="maxDepth" name="maxDepth" type="number" min="0" max="4" value="2" required /></label>
-              <label class="field"><span>최대 동작 수</span><input id="maxActions" name="maxActions" type="number" min="0" max="200" value="20" required /></label>
-              <label class="field"><span>실행 제한 시간 · 초</span><input id="timeoutSeconds" name="timeoutSeconds" type="number" min="15" max="600" value="300" required /></label>
+              <label class="field"><span>환경당 최대 페이지</span><input id="maxPages" name="maxPages" type="number" min="1" max="200" value="10" required /></label>
+              <label class="field"><span>최대 탐색 깊이</span><input id="maxDepth" name="maxDepth" type="number" min="0" max="8" value="2" required /></label>
+              <label class="field"><span>최대 동작 수</span><input id="maxActions" name="maxActions" type="number" min="0" max="1000" value="20" required /></label>
+              <label class="field"><span>실행 제한 시간 · 초</span><input id="timeoutSeconds" name="timeoutSeconds" type="number" min="15" max="3600" value="300" required /></label>
               <label class="field"><span>시각 검토 임계값 · %</span><input id="visualThreshold" name="visualThreshold" type="number" min="0.1" max="100" step="0.1" value="2" required /></label>
             </div>
-            <p class="helper">임계값은 이번 실행의 시각 차이 판정에 적용됩니다. 결과를 좁히는 차이율 필터는 검사 후 별도로 사용할 수 있습니다.</p>
+            <p class="helper">한도: 페이지 최대 200 · 깊이 8 · 동작 1000 · 시간 3600초(1시간). 환경 비교는 동작 수를 A/B가 반씩 씁니다. 임계값은 이번 실행의 시각 차이 판정에 적용됩니다. 결과를 좁히는 차이율 필터는 검사 후 별도로 사용할 수 있습니다.</p>
             <label class="field crawl-scope-field"><span>페이지 탐색 범위</span><select id="crawlScope" name="crawlScope"><option value="approved_paths">승인한 경로만 · 기본</option><option value="same_origin_readonly">환경 내부 읽기 전용 링크 탐색 · 선택 시 확대</option></select></label>
             <p id="crawlScopeHint" class="helper"></p>
             <p class="helper">확대 탐색은 선택한 각 시작 URL의 출처(scheme·host·port) 내부 읽기 링크에 한합니다. 다른 환경·외부 호스트, 계정·개인정보·쓰기 동작, POST, 다운로드와 API·데이터 파일은 제외합니다.</p>
@@ -157,6 +167,16 @@
               <div class="details-content">
                 <div class="login-option">
                   <label class="checkbox-line"><input id="loginEnabled" type="checkbox" /><span><b>테스트 계정 자동 로그인</b> · 계정·비밀번호는 이 PC의 비밀 파일(<code>setup_login_windows.bat</code>)에서만 읽습니다. 선택자를 비우면 로그인 링크 → 비밀번호 입력란 → 그 앞의 아이디 입력란을 <b>자동 탐지</b>합니다</span></label>
+                  <div class="credential-box" id="credentialBox">
+                    <div class="credential-status"><span id="credentialState" class="job-state">확인 중</span><span id="credentialText" class="helper">공용 테스트 계정 상태를 불러오는 중입니다.</span></div>
+                    <div class="credential-form">
+                      <label class="field"><span>테스트 계정 ID</span><input id="credentialId" maxlength="200" autocomplete="off" spellcheck="false" placeholder="예: qavivatest003" /></label>
+                      <label class="field"><span>비밀번호</span><input id="credentialPw" type="password" maxlength="200" autocomplete="new-password" placeholder="입력 후 저장" /></label>
+                      <button id="saveCredential" class="primary" type="button">계정 저장</button>
+                      <button id="clearCredential" class="secondary danger" type="button">삭제</button>
+                    </div>
+                    <p class="helper">저장하면 이 PC의 <code>secrets/accounts.json</code>(git 제외)에만 기록되고 화면·검사 요청·보고서에는 남지 않습니다. 한 번 저장하면 모든 환경(A/B)·제품에 이 계정으로 자동 로그인합니다.</p>
+                  </div>
                   <div id="loginFields" class="login-fields disabled">
                     <div class="two-columns">
                       <label class="field"><span>로그인 페이지 URL · 비우면 시작 URL</span><input id="loginUrl" type="url" maxlength="2000" autocomplete="off" spellcheck="false" placeholder="https://stg-e.example.test/login" /></label>
@@ -278,5 +298,7 @@
     </section>
     <footer>VISANG QA AI · 근거가 있는 판정, 재현 가능한 검수 · 로컬 전용(loopback)</footer>
   </main>
+  </div>
+</div>
 </body>
 </html>

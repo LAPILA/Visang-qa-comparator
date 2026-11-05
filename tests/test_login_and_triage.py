@@ -440,3 +440,25 @@ class VisualComparabilityTests(unittest.TestCase):
             {'category': 'POLICY_BLOCKED', 'renderingRelevant': False, 'url': 'https://www.googletagmanager.com/gtag/js'}], 'readiness': {}, 'captureReady': True}
         blocked = [item for item in record['issues'] if item['category'] in ('POLICY_BLOCKED', 'EXECUTION_BLOCKED')]
         self.assertFalse(any(item.get('renderingRelevant') for item in blocked))
+
+
+class SharedCredentialApiTests(unittest.TestCase):
+    def test_save_status_clear_never_echo_password(self):
+        from qa.secrets import clear_shared_credentials, credentials_status, save_shared_credentials
+        with tempfile.TemporaryDirectory() as directory:
+            env = {}
+            self.assertEqual(credentials_status(environ=env, root=directory), {'configured': False})
+            status = save_shared_credentials('qavivatest003', 'p@ss~!', environ=env, root=directory)
+            self.assertTrue(status['configured'])
+            self.assertNotIn('p@ss', json.dumps(status))
+            self.assertNotEqual(status['maskedId'], 'qavivatest003')
+            self.assertEqual(load_credentials('b', environ=env, root=directory).password, 'p@ss~!')
+            stored = json.loads((Path(directory) / 'secrets' / 'accounts.json').read_text(encoding='utf-8'))
+            self.assertEqual(stored['accounts']['default']['id'], 'qavivatest003')
+            with self.assertRaises(ValueError):
+                save_shared_credentials('only-id', '', environ=env, root=directory)
+            self.assertFalse(clear_shared_credentials(environ=env, root=directory)['configured'])
+
+    def test_run_limits_allow_long_full_checks(self):
+        options = parse_options({'profileId': 'synthetic-demo', 'maxPages': 200, 'maxDepth': 8, 'maxActions': 1000, 'timeoutSeconds': 3600}, 'http://127.0.0.1:1')
+        self.assertEqual((options['max_pages'], options['max_depth'], options['max_actions'], options['timeout_seconds']), (200, 8, 1000, 3600))
