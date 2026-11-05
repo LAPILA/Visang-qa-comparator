@@ -57,6 +57,32 @@ def equivalent_route_key(url):
     return route + ('?' + query if query else '')
 
 
+def instance_template(url):
+    """Route with instance identifiers wildcarded: ``/notice/view?seq=123`` → ``/notice/view?seq=*``.
+
+    Used to sample "the same page with another record" (notice detail, prev/next post,
+    pagination) instead of walking every record. Path segments that are numbers/UUIDs,
+    instance-like query keys (id, idx, no, seq, ...Id) and purely numeric query values
+    are wildcarded; everything else keeps its exact value.
+    """
+    p = urlsplit(url)
+    hash_route, _, hash_query = p.fragment.partition('?')
+
+    def path_shape(path):
+        return '/'.join('*' if _PATH_INSTANCE.fullmatch(unquote(part)) else part for part in path.split('/'))
+
+    def query_shape(query):
+        pairs = parse_qsl(query, keep_blank_values=True)
+        return '&'.join(f"{key}={'*' if _INSTANCE_KEY.search(key) or value.isdigit() else value}" for key, value in sorted(pairs))
+
+    shape = path_shape(p.path or '/')
+    if p.query:
+        shape += '?' + query_shape(p.query)
+    if hash_route.startswith('/'):
+        shape += '#' + path_shape(hash_route) + ('?' + query_shape(hash_query) if hash_query else '')
+    return shape
+
+
 def _hash_only_difference(left, right):
     """True when the two URLs differ only by a ``#/`` SPA prefix or home alias."""
     def shape(value):

@@ -199,7 +199,7 @@ function applyProfile({ restoreRememberedIds = true } = {}) {
   $('#crawlScope').value = defaults.crawlScope || profile.crawlScope || 'approved_paths';
   populateEnvironmentSelectors(profile);
   $('#profileHint').textContent = profile.description || '등록한 시작 URL과 승인된 동작만 검사합니다.';
-  const fallback = { mode: 'combined', maxPages: 10, maxDepth: 2, maxActions: 20, timeoutSeconds: 300, visualThreshold: 2 };
+  const fallback = { mode: 'combined', maxPages: 10, maxDepth: 2, maxActions: 20, timeoutSeconds: 300, visualThreshold: 2, instanceSampleLimit: 3 };
   for (const [name, value] of Object.entries(fallback)) $(`#${name}`).value = defaults[name] ?? value;
   $('#pairStartPages').checked = defaults.pairStartPages ?? profile.pairStartPages ?? true;
   for (const name of ['aliases', 'regions', 'safeActions', 'scenarioIds', 'conditions', 'privateMaskSelectors']) $(`#${name}`).value = JSON.stringify(defaults[name] || profile[name] || [], null, 2);
@@ -224,7 +224,7 @@ function loadRunSettings({ visual = false } = {}) {
   $('#testType').value = read('test_type', 'testType') || job.testType || job.report?.testType || 'comparison';
   $('#previousRunId').value = '';
   applyProfile({ restoreRememberedIds: false });
-  const fields = { baselineUrl: 'baseline_url', candidateUrl: 'candidate_url', baselineName: 'baseline_name', candidateName: 'candidate_name', crawlScope: 'crawl_scope', operatorId: 'operator_id', testType: 'test_type', previousRunId: 'previous_run_id', mode: 'mode', maxPages: 'max_pages', maxDepth: 'max_depth', maxActions: 'max_actions', timeoutSeconds: 'timeout_seconds', visualThreshold: 'visual_threshold' };
+  const fields = { baselineUrl: 'baseline_url', candidateUrl: 'candidate_url', baselineName: 'baseline_name', candidateName: 'candidate_name', crawlScope: 'crawl_scope', operatorId: 'operator_id', testType: 'test_type', previousRunId: 'previous_run_id', mode: 'mode', maxPages: 'max_pages', maxDepth: 'max_depth', maxActions: 'max_actions', timeoutSeconds: 'timeout_seconds', visualThreshold: 'visual_threshold', instanceSampleLimit: 'instance_sample_limit' };
   for (const [id, snake] of Object.entries(fields)) {
     const value = read(snake, id);
     if (value != null) $(`#${id}`).value = value;
@@ -306,7 +306,7 @@ function buildPayload() {
   if (payload.testType === 'comparison') { payload.candidateUrl = $('#candidateUrl').value.trim(); payload.candidateName = $('#candidateName').value.trim(); payload.candidateEnvironmentId = $('#candidateEnvironmentId').value.startsWith('project:') ? 'custom' : $('#candidateEnvironmentId').value; payload.pairStartPages = $('#pairStartPages').checked; payload.routeEquivalence = $('#routeEquivalence').checked; if (!safeUrl(payload.candidateUrl)) throw new Error('올바른 비교 B URL을 입력해 주세요.'); if (!payload.candidateName) throw new Error('B 환경 이름을 입력해 주세요.'); }
   if (payload.testType === 'regression') { payload.previousRunId = $('#previousRunId').value; if (!payload.previousRunId) throw new Error('회귀 비교의 기준이 될 과거 실행을 선택해 주세요.'); }
   if (payload.testType === 'conditional') { payload.conditions = readArray('conditions'); if (!payload.conditions.length) throw new Error('조건 기반 검사에 사용할 conditions를 한 개 이상 입력해 주세요.'); }
-  for (const name of ['maxPages', 'maxDepth', 'maxActions', 'timeoutSeconds', 'visualThreshold']) payload[name] = Number($(`#${name}`).value);
+  for (const name of ['maxPages', 'maxDepth', 'maxActions', 'timeoutSeconds', 'visualThreshold', 'instanceSampleLimit']) payload[name] = Number($(`#${name}`).value);
   payload.xhrPolicy = $('#xhrPolicy').value; payload.observationMode = $('#observationMode').value; payload.smokeActions = $('#smokeActions').checked; payload.safetyLevel = $('#safetyLevel').value; payload.autoDismiss = $('#autoDismiss').checked;
   payload.dismissSelectors = $('#dismissSelectors').value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
   if ($('#entrySelector').value.trim()) {
@@ -562,7 +562,7 @@ function rowFor(item, index) {
   const paired = Boolean(item.baseline && item.candidate);
   const titleSummary = paired ? `A: ${item.baseline.title || '제목 미기록'} / B: ${item.candidate.title || '제목 미기록'}` : item.baseline ? `A: ${item.baseline.title || '제목 미기록'}` : item.candidate ? `B: ${item.candidate.title || '제목 미기록'}` : '제목 정보 없음';
   const unvisited = Array.isArray(item.unvisitedPages) ? item.unvisitedPages : null;
-  const primary = el('div', {}, [el('div', { class: 'pathname', text: unvisited ? `미방문 페이지 ${item.unvisitedCount ?? unvisited.length}개 · ${(item.flags || [])[0] || ''}` : item.key === '__ROOT__' ? '홈 페이지' : item.key || item.page_class || '페이지' }), el('div', { class: 'desc', text: unvisited ? `${item.baseline ? '환경 A' : '환경 B'} · 한도·정책으로 방문하지 않은 페이지 묶음 (목록은 상세와 페이지 인벤토리)` : titleSummary })]);
+  const primary = el('div', {}, [el('div', { class: 'pathname', text: unvisited ? ((item.flags || [])[0] === 'SAMPLE_LIMIT_REACHED' ? `샘플링으로 생략 ${item.unvisitedCount ?? unvisited.length}개 · 같은 모양 페이지` : `미방문 페이지 ${item.unvisitedCount ?? unvisited.length}개 · ${(item.flags || [])[0] || ''}`) : item.key === '__ROOT__' ? '홈 페이지' : item.key || item.page_class || '페이지' }), el('div', { class: 'desc', text: unvisited ? `${item.baseline ? '환경 A' : '환경 B'} · 한도·정책으로 방문하지 않은 페이지 묶음 (목록은 상세와 페이지 인벤토리)` : titleSummary })]);
   if (item.region_id) primary.append(el('div', { class: 'region-label', text: item.region_id }));
   primary.append(triageBadge(item));
   primary.append(el('div', { class: 'observation-summary', text: meta.findings[0]?.summary || (item.checks || []).find(check => check.status !== 'PASS')?.reason_code || '구조화 관찰 요약 미등록' }));

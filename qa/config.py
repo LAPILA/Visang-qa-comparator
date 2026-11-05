@@ -219,7 +219,7 @@ def public_options(options):
              'xhr_policy': 'xhrPolicy', 'dismiss_selectors': 'dismissSelectors',
              'observation_mode': 'observationMode', 'smoke_actions': 'smokeActions', 'smoke_action_limit': 'smokeActionLimit',
              'safety_level': 'safetyLevel', 'smoke_fill_text': 'smokeFillText', 'capture_settle_ms': 'captureSettleMs',
-             'auto_dismiss': 'autoDismiss',
+             'auto_dismiss': 'autoDismiss', 'instance_sample_limit': 'instanceSampleLimit',
              'crawl_scope': 'crawlScope', 'baseline_name': 'baselineName', 'candidate_name': 'candidateName',
              'baseline_environment_id': 'baselineEnvironmentId', 'candidate_environment_id': 'candidateEnvironmentId'}
     return {names.get(key, key): value for key, value in options.items()
@@ -379,6 +379,7 @@ def parse_options(data, base_origin):
         'safety_level': safety_level, 'smoke_fill_text': _text(merged.get('smokeFillText', 'QA자동테스트'), '스모크 입력값', 100),
         'capture_settle_ms': _number(merged, 'captureSettleMs', 4000, 0, 15000, True),
         'auto_dismiss': _boolean(merged.get('autoDismiss', False)),
+        'instance_sample_limit': _number(merged, 'instanceSampleLimit', 3, 0, 50, True),
         'resource_hosts': sorted(resource_hosts),
         'private_mask_selectors': private_masks,
         'profile_id': profile_id, 'operator_id': _text(merged.get('operatorId', 'QA-A'), '담당자', 50),

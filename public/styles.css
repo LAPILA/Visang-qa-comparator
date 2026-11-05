@@ -157,7 +157,7 @@ select { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmln
 .condition-help summary { font-size: var(--fs-xs); font-weight: 700; color: var(--accent); cursor: pointer; }
 .condition-help pre { font-size: 11px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2); background: #fff; border: 1px solid var(--line); border-radius: var(--r-sm); padding: 10px; }
 
-.option-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.option-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
 .crawl-scope-field { margin-top: 16px; }
 
 .configuration-details { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); margin-top: 10px; }

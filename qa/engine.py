@@ -18,7 +18,7 @@ from urllib.parse import urlsplit, urlunsplit
 from playwright.sync_api import sync_playwright
 
 from .comparison import image_diff, visual_check
-from .matching import match_pages, normalize_url, page_key
+from .matching import instance_template, match_pages, normalize_url, page_key
 from .policy import (readonly_navigation_reason, aggregate_status, check, classify_candidate, dangerous_action,
                      host_allowed, http_observation, route_allowed, sanitize_message, sanitize_url,
                      STATUSES, unexecuted_status, resource_allowed)
@@ -1323,6 +1323,8 @@ def _crawl(browser, side, options, artifact_root, run_id, progress, budget, auth
     pages, deferred = OrderedDict(), []
     trails = {normalize_url(seed): ['start-page']}
     queue, seen = deque([(seed, 0)]), {normalize_url(seed)}
+    sample_limit = int(options.get('instance_sample_limit', 3) or 0)
+    template_counts = {instance_template(normalize_url(seed)): 1}
     mirror_paths, mirrored_identities = set(), set()
     for mirrored in options.get('_mirror_urls', []):
         try:
@@ -1333,6 +1335,7 @@ def _crawl(browser, side, options, artifact_root, run_id, progress, budget, auth
             continue
         seen.add(identity)
         mirrored_identities.add(identity)
+        template_counts[instance_template(identity)] = template_counts.get(instance_template(identity), 0) + 1
         # Keep A's menu trail so semantic corroboration (same trail + heading) still applies.
         trails[identity] = list(mirrored.get('trail') or ['start-page'])
         queue.append((identity, int(mirrored.get('depth') or 1)))
@@ -1405,6 +1408,14 @@ def _crawl(browser, side, options, artifact_root, run_id, progress, budget, auth
                     action.update(state='SKIP', reason='ALREADY_DISCOVERED')
                     continue
                 seen.add(normalized)
+                template = instance_template(normalized)
+                if sample_limit:
+                    if template_counts.get(template, 0) >= sample_limit:
+                        # Same page shape with another record (prev/next post, page 7 of 40): enough samples.
+                        action.update(state='SKIP', reason='SAMPLE_LIMIT_REACHED')
+                        deferred.append(deferred_page(normalized, 'SAMPLE_LIMIT_REACHED', depth + 1))
+                        continue
+                    template_counts[template] = template_counts.get(template, 0) + 1
                 trails[normalized] = [*record.get('navigationTrail', []),
                                       sanitize_message(action.get('label') or page_key(normalized), 100)]
                 if depth >= int(options.get('max_depth', 1)):
@@ -1658,7 +1669,7 @@ def run_scan(options, run_id, artifact_root, progress, cancelled, auth_gate=None
                  entry=options.get('entry') or None, xhr_policy=options.get('xhr_policy', 'allow_allowed_hosts'),
                  dismiss_selectors=options.get('dismiss_selectors', []), auto_dismiss=bool(options.get('auto_dismiss')), observation_mode=options.get('observation_mode', 'strict'),
                  smoke_actions=bool(options.get('smoke_actions')), smoke_action_limit=int(options.get('smoke_action_limit', 20)),
-                 safety_level=options.get('safety_level', 'strict'))
+                 safety_level=options.get('safety_level', 'strict'), instance_sample_limit=int(options.get('instance_sample_limit', 3) or 0))
     checksum = lambda value: sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode('utf-8')).hexdigest()
     incomplete = bool(blocked_requests or a_skip or b_skip or budget.reason()
                       or any(c['status'] in ('BLOCKED', 'ERROR') and c.get('required', True) for c in unique_checks.values()))
@@ -1684,6 +1695,7 @@ def run_scan(options, run_id, artifact_root, progress, cancelled, auth_gate=None
                               entry=options.get('entry') or None, xhrPolicy=options.get('xhr_policy', 'allow_allowed_hosts'),
                               dismissSelectors=options.get('dismiss_selectors', []), autoDismiss=bool(options.get('auto_dismiss')), observationMode=options.get('observation_mode', 'strict'),
                               smokeActions=bool(options.get('smoke_actions')), safetyLevel=options.get('safety_level', 'strict'),
+                              instanceSampleLimit=int(options.get('instance_sample_limit', 3) or 0),
                               login={'method': 'MANUAL' if options.get('manual_login') else 'TEST_ACCOUNT' if options.get('login') else 'NONE',
                                      'form': {key: value for key, value in (options.get('login') or {}).items()} or None,
                                      'credentialsStored': False},

@@ -462,3 +462,35 @@ class SharedCredentialApiTests(unittest.TestCase):
     def test_run_limits_allow_long_full_checks(self):
         options = parse_options({'profileId': 'synthetic-demo', 'maxPages': 200, 'maxDepth': 8, 'maxActions': 1000, 'timeoutSeconds': 3600}, 'http://127.0.0.1:1')
         self.assertEqual((options['max_pages'], options['max_depth'], options['max_actions'], options['timeout_seconds']), (200, 8, 1000, 3600))
+
+
+class InstanceSamplingTests(unittest.TestCase):
+    def test_templates_wildcard_records_but_keep_routes(self):
+        from qa.matching import instance_template
+        self.assertEqual(instance_template('https://v.test/notice/view?seq=123'), instance_template('https://v.test/notice/view?seq=124'))
+        self.assertEqual(instance_template('https://mv.test/#/notice/detail/5512'), instance_template('https://mv.test/#/notice/detail/7'))
+        self.assertEqual(instance_template('https://v.test/list?page=7&cat=a'), instance_template('https://v.test/list?cat=a&page=8'))
+        self.assertNotEqual(instance_template('https://v.test/list?cat=a'), instance_template('https://v.test/list?cat=b'))
+        self.assertNotEqual(instance_template('https://v.test/notice/view?seq=1'), instance_template('https://v.test/event/view?seq=1'))
+
+    def test_crawl_samples_detail_records(self):
+        temporary_root = Path(__file__).resolve().parents[1] / 'output' / 'tmp'
+        temporary_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temporary_root) as directory:
+            runs = Path(directory) / 'runs'
+            server = Server(('127.0.0.1', 0), runs_dir=runs)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            try:
+                options = parse_options({'profileId': 'custom', 'operatorId': 'sample', 'testType': 'single', 'mode': 'discovery',
+                                         'baselineUrl': server.base_origin + '/demo/a/notice', 'crawlScope': 'same_origin_readonly',
+                                         'maxPages': 10, 'maxDepth': 2, 'maxActions': 0, 'timeoutSeconds': 60,
+                                         'instanceSampleLimit': 1, 'safetyLevel': 'test_account'}, server.base_origin)
+                report = run_scan(options, str(uuid.uuid4()), runs, lambda message: None, lambda: False)
+            finally:
+                server.shutdown()
+                server.server_close()
+        visited = [row['key'] for row in report['results'] if row['region_id'] == 'page' and not row.get('unvisitedPages')]
+        self.assertEqual(sum('/detail' in key for key in visited), 1, visited)
+        sampled = [row for row in report['results'] if row.get('unvisitedPages') and 'SAMPLE_LIMIT_REACHED' in row['flags']]
+        self.assertTrue(sampled and sampled[0]['status'] == 'SKIP')
+        self.assertEqual(report['manifest']['instanceSampleLimit'], 1)

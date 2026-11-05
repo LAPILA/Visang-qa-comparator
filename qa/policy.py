@@ -118,6 +118,8 @@ def aggregate_status(checks):
 def unexecuted_status(reason):
     """A budget/prerequisite prevents execution; a policy intentionally excludes it."""
     reason = str(reason or '')
+    if reason == 'SAMPLE_LIMIT_REACHED':
+        return 'SKIP'  # intentional sampling of same-shape records, not a missed check
     if (reason == 'CANCELLED' or 'LIMIT' in reason or 'PREREQUISITE' in reason
             or reason in {'MANUAL_AUTH_REQUIRED', 'LOGIN_REQUIRED', 'SESSION_EXPIRED',
                           'ROLE_UNAVAILABLE', 'INSUFFICIENT_DATA', 'NO_COMPARABLE_PIXELS',

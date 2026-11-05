@@ -141,9 +141,10 @@
               <label class="field"><span>최대 탐색 깊이</span><input id="maxDepth" name="maxDepth" type="number" min="0" max="8" value="2" required /></label>
               <label class="field"><span>최대 동작 수</span><input id="maxActions" name="maxActions" type="number" min="0" max="1000" value="20" required /></label>
               <label class="field"><span>실행 제한 시간 · 초</span><input id="timeoutSeconds" name="timeoutSeconds" type="number" min="15" max="3600" value="300" required /></label>
+              <label class="field"><span>같은 모양 페이지 샘플 수</span><input id="instanceSampleLimit" name="instanceSampleLimit" type="number" min="0" max="50" value="3" required /></label>
               <label class="field"><span>시각 검토 임계값 · %</span><input id="visualThreshold" name="visualThreshold" type="number" min="0.1" max="100" step="0.1" value="2" required /></label>
             </div>
-            <p class="helper">한도: 페이지 최대 200 · 깊이 8 · 동작 1000 · 시간 3600초(1시간). 환경 비교는 동작 수를 A/B가 반씩 씁니다. 임계값은 이번 실행의 시각 차이 판정에 적용됩니다. 결과를 좁히는 차이율 필터는 검사 후 별도로 사용할 수 있습니다.</p>
+            <p class="helper">같은 모양 페이지 샘플 수: 공지 상세·이전글/다음글·목록 2페이지처럼 <b>번호만 다른 같은 화면</b>은 이 개수만 방문하고 나머지는 "샘플링으로 생략"(미실행)으로 묶습니다. 0이면 전부 방문. 한도: 페이지 최대 200 · 깊이 8 · 동작 1000 · 시간 3600초(1시간). 환경 비교는 동작 수를 A/B가 반씩 씁니다. 임계값은 이번 실행의 시각 차이 판정에 적용됩니다. 결과를 좁히는 차이율 필터는 검사 후 별도로 사용할 수 있습니다.</p>
             <label class="field crawl-scope-field"><span>페이지 탐색 범위</span><select id="crawlScope" name="crawlScope"><option value="approved_paths">승인한 경로만 · 기본</option><option value="same_origin_readonly">환경 내부 읽기 전용 링크 탐색 · 선택 시 확대</option></select></label>
             <p id="crawlScopeHint" class="helper"></p>
             <p class="helper">확대 탐색은 선택한 각 시작 URL의 출처(scheme·host·port) 내부 읽기 링크에 한합니다. 다른 환경·외부 호스트, 계정·개인정보·쓰기 동작, POST, 다운로드와 API·데이터 파일은 제외합니다.</p>
