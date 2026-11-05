@@ -11,15 +11,29 @@ async function request(path, body) {
   if (!response.ok) throw new Error(data.error || `서버 오류 (${response.status})`);
   return data;
 }
-function field(labelText, name, value, type, maximum, placeholder) {
+function field(labelText, name, value, type, maximum, placeholder, required = true) {
   const label = document.createElement('label'); label.textContent = labelText;
   const input = document.createElement('input');
-  Object.assign(input, { name, value, type, maxLength: maximum, placeholder, required: true });
+  Object.assign(input, { name, value, type, maxLength: maximum, placeholder, required });
   label.append(input); return label;
 }
 function addEnvironment(environment = { id: crypto.randomUUID(), name: '', url: '' }) {
   const row = document.createElement('div'); row.className = 'environment-row'; row.dataset.id = environment.id;
   row.append(field('환경 이름', 'environmentName', environment.name, 'text', 50, '예: 운영'), field('환경 URL', 'environmentUrl', environment.url, 'url', 2000, 'https://example.com/'));
+  const login = document.createElement('div'); login.className = 'environment-login-fields';
+  login.append(field('로그인 페이지 URL · 선택', 'loginUrl', environment.loginUrl || '', 'url', 2000, 'https://example.com/login', false),
+    field('로그인 ID · 선택', 'loginId', environment.loginId || '', 'text', 200, '계정 ID', false),
+    field('비밀번호 · 선택', 'loginPassword', '', 'password', 500, environment.hasPassword ? '저장됨 · 변경할 때만 입력' : '비밀번호 입력', false));
+  login.querySelector('[name=loginPassword]').autocomplete = 'new-password';
+  const clear = document.createElement('label'); clear.className = 'clear-password';
+  clear.innerHTML = '<input type="checkbox" name="clearPassword"> 저장된 비밀번호 삭제';
+  clear.querySelector('input').disabled = !environment.hasPassword;
+  clear.querySelector('input').addEventListener('change', event => {
+    const password = login.querySelector('[name=loginPassword]');
+    password.disabled = event.target.checked;
+    if (event.target.checked) password.value = '';
+  });
+  login.append(clear); row.append(login);
   const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'button danger'; remove.textContent = '삭제';
   remove.setAttribute('aria-label', `${environment.name || '빈 환경'} 삭제`);
   remove.addEventListener('click', () => { if (rows.children.length <= 1) { message('환경은 최소 한 개가 필요합니다.', true); return; } row.remove(); message('환경을 목록에서 제거했습니다. 저장하면 반영됩니다.'); });
@@ -44,11 +58,17 @@ function renderList() {
 }
 function readForm() {
   if (!form.reportValidity()) return null;
-  const environments = [...rows.children].map(row => ({ id: row.dataset.id, name: row.querySelector('[name=environmentName]').value.trim(), url: row.querySelector('[name=environmentUrl]').value.trim() }));
+  const environments = [...rows.children].map(row => ({ id: row.dataset.id, name: row.querySelector('[name=environmentName]').value.trim(), url: row.querySelector('[name=environmentUrl]').value.trim(),
+    loginUrl: row.querySelector('[name=loginUrl]').value.trim(), loginId: row.querySelector('[name=loginId]').value.trim(),
+    password: row.querySelector('[name=loginPassword]').value, clearPassword: row.querySelector('[name=clearPassword]').checked }));
   if (!environments.length || environments.some(item => !item.name || !item.url)) { message('모든 환경의 이름과 URL을 입력하세요.', true); return null; }
   for (const environment of environments) {
     try { const parsed = new URL(environment.url); if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) throw Error(); }
     catch { message(`“${environment.name}”의 URL을 확인하세요.`, true); return null; }
+    if (environment.loginUrl) {
+      try { const parsed = new URL(environment.loginUrl); if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) throw Error(); }
+      catch { message(`“${environment.name}”의 로그인 URL을 확인하세요.`, true); return null; }
+    }
   }
   return { id: selectedId || crypto.randomUUID(), name: form.elements.name.value.trim(), environments };
 }
