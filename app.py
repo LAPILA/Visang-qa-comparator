@@ -157,6 +157,29 @@ class JobService:
                                      schemaVersion=job.get('schemaVersion'))
         return sorted(saved.values(), key=lambda item: item.get('startedAt') or '', reverse=True)
 
+    def delete(self, run_id):
+        with self.lock:
+            if self.active == run_id:
+                raise ValueError('진행 중인 실행은 삭제할 수 없습니다. 먼저 중단하세요.')
+            self.jobs.pop(run_id, None)
+            removed = self.store.delete(run_id)
+        if not removed:
+            raise ValueError('삭제할 실행 기록을 찾을 수 없습니다.')
+        return True
+
+    def delete_finished(self):
+        """Clear every run except the active one; evidence folders are removed permanently."""
+        removed = 0
+        for item in self.list():
+            if item['id'] == self.active or item.get('state') in ('running', 'awaiting_auth'):
+                continue
+            try:
+                self.delete(item['id'])
+                removed += 1
+            except ValueError:
+                continue
+        return removed
+
     def begin_close(self):
         with self.lock:
             self.closing = True
@@ -200,8 +223,9 @@ class JobService:
                 job['progress'] = str(message)
                 self.store.save(job)
 
-        def auth_gate(side, context, url):
-            page = context.new_page()
+        def auth_gate(side, context, url, page=None):
+            owned = page is None
+            page = context.new_page() if owned else page
             try:
                 self.auth_events[run_id].clear()
                 page.goto(url, wait_until='domcontentloaded', timeout=20000)
@@ -220,7 +244,8 @@ class JobService:
                     job.update(state='running', authSide=None, progress='수동 로그인 이후 검사 준비 중')
                     self.store.save(job)
             finally:
-                page.close()
+                if owned:
+                    page.close()
 
         try:
             if self.runner is None:
@@ -405,7 +430,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/bootstrap':
                 # This token is deliberately returned only by a same-origin, no-CORS endpoint.
                 return self.json_response(200, {'profiles': profiles(self.server.base_origin),
-                                               'sessionToken': self.server.session_token, 'rememberedIds': {},
+                                               'sessionToken': self.server.session_token, 'rememberedIds': {}, 'version': __version__,
                                                'schemaVersion': '2.0', 'testTypes': [
                                                    {'id': 'comparison', 'label': '환경 비교 QA'},
                                                    {'id': 'single', 'label': '단일 환경 QA'},
@@ -486,8 +511,13 @@ class Handler(BaseHTTPRequestHandler):
                 run_id = self.server.service.start(options)
                 return self.json_response(202, {'id': run_id})
             parts = path.strip('/').split('/')
+            if parts == ['api', 'scans', 'delete-finished']:
+                return self.json_response(200, {'removed': self.server.service.delete_finished()})
             if len(parts) == 4 and parts[:2] == ['api', 'scans']:
                 run_id, action = parts[2:]
+                if action == 'delete':
+                    self.server.service.delete(run_id)
+                    return self.json_response(200, {'ok': True})
                 if action == 'cancel':
                     self.server.service.cancel(run_id)
                     return self.json_response(200, {'ok': True})
@@ -508,8 +538,27 @@ class Handler(BaseHTTPRequestHandler):
             return self.json_response(400, {'error': str(exc)})
 
 
+def check_dependencies():
+    """Fail loudly at startup instead of at the first scan when the wrong Python is used."""
+    import importlib.util
+    import sys
+    missing = [name for name in ('playwright', 'PIL') if importlib.util.find_spec(name) is None]
+    if not missing:
+        return True
+    print('=' * 72, flush=True)
+    print(f'[경고] 현재 Python({sys.executable})에 {", ".join(missing)} 모듈이 없습니다.', flush=True)
+    print('       검사를 시작하면 ModuleNotFoundError로 실패합니다. 아래 중 하나로 해결하세요.', flush=True)
+    print('       1) 처음이면: setup_windows.bat 실행 후 run_windows.bat 로 시작', flush=True)
+    print(r'       2) 직접 실행 시: .\.venv\Scripts\python.exe app.py  (시스템 python 대신 가상환경 사용)', flush=True)
+    print(r'       3) 가상환경에 패키지만 없으면: .\.venv\Scripts\python.exe -m pip install -r requirements.txt', flush=True)
+    print(r'          이어서: .\.venv\Scripts\python.exe -m playwright install chromium', flush=True)
+    print('=' * 72, flush=True)
+    return False
+
+
 def main():
     port = int(os.environ.get('PORT', '3000'))
+    check_dependencies()
     server = Server(('127.0.0.1', port))
     print(f'VISANG QA AI {__version__}: {server.base_origin}', flush=True)
     try:

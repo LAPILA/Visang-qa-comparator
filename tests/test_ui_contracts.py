@@ -281,6 +281,7 @@ class WorkspaceContractBrowserTests(unittest.TestCase):
         expect(row.locator('.detail-grid')).to_contain_text('차단 후 콘솔 오류')
         expect(row.locator('.detail-grid')).to_contain_text('정책 영향 가능성 / 원인 미확정')
         expect(row.locator('.detail-grid')).to_contain_text('HOST_NOT_ALLOWED')
+        row.locator('.details > .misc-log > summary').click()  # findings live under the collapsed 기타 log
         row.locator('.finding-card summary').click()
         expect(row.locator('.finding-card')).to_contain_text('관련 차단 요청')
         self.page.locator('#loadRunSettings').click()

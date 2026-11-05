@@ -14,11 +14,20 @@ TEST_TYPES = ('comparison', 'single', 'regression', 'conditional')
 CRAWL_SCOPES = ('approved_paths', 'same_origin_readonly')
 # Only static dependencies observed in the supplied templates/run are preapproved.
 # These hosts never become navigation, API, or manual-auth host permissions.
+# Static asset / SDK hosts observed in real runs (2026-11-04). Passive GET resources only:
+# this list never approves navigation, XHR or login hosts. Trackers are deliberately absent.
+_SHARED_ASSET_HOSTS = ['www.vivasam.com', 'stg.vivasam.com', 'dn.vivasam.com', 'dn22.vivasam.com',
+                       'fonts.googleapis.com', 'fonts.gstatic.com', 'code.jquery.com',
+                       'developers.kakao.com', 'dapi.kakao.com', 't1.kakaocdn.net', 'accounts.google.com']
 PROFILE_RESOURCE_HOSTS = {
-    'elementary-pc': ['code.jquery.com'],
-    'elementary-mobile': ['code.jquery.com', 'developers.kakao.com', 'dapi.kakao.com', 'www.vivasam.com'],
-    'secondary-mobile': ['code.jquery.com'],
+    'elementary-pc': list(_SHARED_ASSET_HOSTS),
+    'secondary-pc': list(_SHARED_ASSET_HOSTS),
+    'elementary-mobile': list(_SHARED_ASSET_HOSTS),
+    'secondary-mobile': list(_SHARED_ASSET_HOSTS),
 }
+XHR_POLICIES = ('allow_allowed_hosts', 'block_writes')
+OBSERVATION_MODES = ('strict', 'lenient')
+SAFETY_LEVELS = ('strict', 'test_account')
 
 
 def validate_url(value):
@@ -117,6 +126,11 @@ def profiles(base_origin):
                        'environments': environments, 'disabled': False,
                        'description': '사용자 등록 주소 · 제품과 A/B 환경을 선택하세요. 실제 접속·로그인 여부는 검사에서 확인합니다.',
                        'defaults': {**deepcopy(common), 'resourceHosts': list(PROFILE_RESOURCE_HOSTS.get(key, [])),
+                                    'observationMode': 'lenient', 'visualThreshold': 8,
+                                    # vivasam mobile/PC gate: every route lands on /coverPage (or /#/coverPage) until dismissed.
+                                    'entry': {'selector': 'button, a, [role=button]',
+                                              'text': '모바일웹으로 계속하기|모바일 웹으로 이동하기' if 'mobile' in key else 'PC버전으로 계속하기|PC 버전으로 계속하기',
+                                              'urlPattern': '*coverPage*', 'sides': 'both'},
                                     'baselineName': by_id['production']['label'], 'candidateName': by_id['staging']['label']}})
     result.append({'id': 'custom', 'label': '직접 입력', 'baselineUrl': '', 'candidateUrl': '',
                    'environments': [], 'baselineEnvironmentId': 'custom', 'candidateEnvironmentId': 'custom',
@@ -162,15 +176,34 @@ def _login_config(value):
     result = {'url': validate_url(value.get('url')) if value.get('url') else None}
     for key in _LOGIN_SELECTOR_KEYS:
         raw = value.get(key)
-        if raw in (None, ''):
-            if key in ('usernameSelector', 'passwordSelector', 'submitSelector'):
-                raise ValueError(f'login.{key}는 필수입니다.')
-            result[key] = None
-            continue
-        result[key] = _text(raw, 'login.' + key, 300)
+        result[key] = _text(raw, 'login.' + key, 300) if raw not in (None, '') else None
+    explicit = [result[key] for key in ('usernameSelector', 'passwordSelector', 'submitSelector')]
+    if any(explicit) and not all(explicit):
+        raise ValueError('login 선택자는 아이디·비밀번호·버튼 셋을 모두 적거나, 모두 비워 자동 탐지를 사용하세요.')
+    result['auto'] = not all(explicit)
     result['accountKey'] = _text(value.get('accountKey', 'default'), 'login.accountKey', 50)
     if not re.fullmatch(r'[A-Za-z0-9_.-]+', result['accountKey']):
         raise ValueError('login.accountKey는 영문·숫자·._-만 사용합니다.')
+    return result
+
+
+def _entry_config(value):
+    """A single approved click that dismisses a cover/landing gate on the start page."""
+    if value in (None, '', False, {}):
+        return None
+    if not isinstance(value, dict):
+        raise ValueError('entry 설정은 객체여야 합니다.')
+    selector = value.get('selector')
+    if not selector:
+        raise ValueError('entry.selector(통과 버튼 선택자)는 필수입니다.')
+    result = {'selector': _text(selector, 'entry.selector', 300)}
+    for key in ('text', 'urlPattern'):
+        raw = value.get(key)
+        result[key] = _text(raw, 'entry.' + key, 300) if raw not in (None, '') else None
+    sides = value.get('sides', 'both')
+    if sides not in ('a', 'b', 'both'):
+        raise ValueError("entry.sides는 'a', 'b', 'both' 중 하나여야 합니다.")
+    result['sides'] = sides
     return result
 
 
@@ -182,7 +215,10 @@ def public_options(options):
              'test_type': 'testType', 'previous_run_id': 'previousRunId',
              'private_mask_selectors': 'privateMaskSelectors',
              'pair_start_pages': 'pairStartPages', 'resource_hosts': 'resourceHosts',
-             'route_equivalence': 'routeEquivalence', 'login': 'login',
+             'route_equivalence': 'routeEquivalence', 'login': 'login', 'entry': 'entry',
+             'xhr_policy': 'xhrPolicy', 'dismiss_selectors': 'dismissSelectors',
+             'observation_mode': 'observationMode', 'smoke_actions': 'smokeActions', 'smoke_action_limit': 'smokeActionLimit',
+             'safety_level': 'safetyLevel', 'smoke_fill_text': 'smokeFillText', 'capture_settle_ms': 'captureSettleMs',
              'crawl_scope': 'crawlScope', 'baseline_name': 'baselineName', 'candidate_name': 'candidateName',
              'baseline_environment_id': 'baselineEnvironmentId', 'candidate_environment_id': 'candidateEnvironmentId'}
     return {names.get(key, key): value for key, value in options.items()
@@ -217,6 +253,23 @@ def parse_options(data, base_origin):
     except ValueError as exc:
         raise ValueError('동등 라우트 매칭 옵션은 true 또는 false여야 합니다.') from exc
     login = _login_config(merged.get('login'))
+    entry = _entry_config(merged.get('entry'))
+    xhr_policy = merged.get('xhrPolicy', 'allow_allowed_hosts')
+    if xhr_policy not in XHR_POLICIES:
+        raise ValueError('xhrPolicy는 allow_allowed_hosts 또는 block_writes여야 합니다.')
+    dismiss_selectors = _array(merged.get('dismissSelectors', []), '팝업 닫기 선택자', 10)
+    observation_mode = merged.get('observationMode', 'strict')
+    if observation_mode not in OBSERVATION_MODES:
+        raise ValueError('observationMode는 strict 또는 lenient여야 합니다.')
+    safety_level = merged.get('safetyLevel', 'strict')
+    if safety_level not in SAFETY_LEVELS:
+        raise ValueError('safetyLevel은 strict 또는 test_account여야 합니다.')
+    try:
+        smoke_actions = _boolean(merged.get('smokeActions', False))
+    except ValueError as exc:
+        raise ValueError('smokeActions는 true 또는 false여야 합니다.') from exc
+    for selector in dismiss_selectors:
+        _text(selector, '팝업 닫기 선택자', 300)
     baseline, baseline_environment_id, baseline_label = _resolve_environment(data, profile, 'baseline')
     if test_type == 'comparison':
         candidate, candidate_environment_id, candidate_label = _resolve_environment(data, profile, 'candidate')
@@ -319,13 +372,17 @@ def parse_options(data, base_origin):
         'baseline_environment_id': baseline_environment_id, 'candidate_environment_id': candidate_environment_id,
         'baseline_name': baseline_name, 'candidate_name': candidate_name, 'crawl_scope': crawl_scope,
         'test_type': test_type, 'previous_run_id': previous_run_id, 'conditions': conditions,
-        'pair_start_pages': pair_start_pages, 'route_equivalence': route_equivalence, 'login': login,
+        'pair_start_pages': pair_start_pages, 'route_equivalence': route_equivalence, 'login': login, 'entry': entry,
+        'xhr_policy': xhr_policy, 'dismiss_selectors': dismiss_selectors, 'observation_mode': observation_mode,
+        'smoke_actions': smoke_actions, 'smoke_action_limit': _number(merged, 'smokeActionLimit', 20, 0, 100, True),
+        'safety_level': safety_level, 'smoke_fill_text': _text(merged.get('smokeFillText', 'QA자동테스트'), '스모크 입력값', 100),
+        'capture_settle_ms': _number(merged, 'captureSettleMs', 4000, 0, 15000, True),
         'resource_hosts': sorted(resource_hosts),
         'private_mask_selectors': private_masks,
         'profile_id': profile_id, 'operator_id': _text(merged.get('operatorId', 'QA-A'), '담당자', 50),
         'mode': mode, 'max_pages': _number(merged, 'maxPages', 5, 1, 30, True),
         'max_depth': _number(merged, 'maxDepth', 2, 0, 4, True),
-        'max_actions': _number(merged, 'maxActions', 5, 0, 200 if profile_id == 'synthetic-demo' else 50, True),
+        'max_actions': _number(merged, 'maxActions', 5, 0, 300, True),
         'timeout_seconds': _number(merged, 'timeoutSeconds', 180, 15, 600, True),
         'action_interval': _number(merged, 'actionInterval', 0.25 if profile_id == 'synthetic-demo' else 1, 0.1, 10),
         'visual_threshold': _number(merged, 'visualThreshold', 2, 0.1, 100),

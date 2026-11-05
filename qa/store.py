@@ -166,6 +166,17 @@ class ReportStore:
                                    'schemaVersion': job.get('schemaVersion', '1.0')})
         return sorted(jobs, key=lambda item: item.get('startedAt') or '', reverse=True)
 
+    def delete(self, run_id):
+        """Remove one saved run (report + evidence folder). The caller guards the active run."""
+        path = self._path(run_id)
+        with self.lock:
+            folder = path.parent
+            if not folder.is_dir():
+                return False
+            import shutil
+            shutil.rmtree(folder)
+            return True
+
     def recover(self):
         """A killed worker is incomplete, never silently resumed or marked successful."""
         for summary in self.list():

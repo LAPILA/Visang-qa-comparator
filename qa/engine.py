@@ -19,7 +19,7 @@ from playwright.sync_api import sync_playwright
 
 from .comparison import image_diff, visual_check
 from .matching import match_pages, normalize_url, page_key
-from .policy import (aggregate_status, check, classify_candidate, dangerous_action,
+from .policy import (readonly_navigation_reason, aggregate_status, check, classify_candidate, dangerous_action,
                      host_allowed, http_observation, route_allowed, sanitize_message, sanitize_url,
                      STATUSES, unexecuted_status, resource_allowed)
 
@@ -179,7 +179,7 @@ def _public(page):
     return {key: value for key, value in page.items()
             if key in ('url', 'finalUrl', 'title', 'heading', 'statusCode', 'issues', 'screenshot', 'depth',
                        'actions', 'checks', 'observedAt', 'regions', 'coverage', 'captureReady', 'readiness',
-                       'navigationTrail', 'pageSignature')}
+                       'navigationTrail', 'pageSignature', 'entryAction', 'dismissed', 'mirroredFromBaseline')}
 
 
 def _safe_record(page):
@@ -225,6 +225,11 @@ class Budget:
         return True
 
 
+_INFORMATIONAL_CATEGORIES = frozenset({
+    'JS_ERROR', 'JS_ERROR_AFTER_POLICY_BLOCK', 'CONSOLE_ERROR', 'CONSOLE_ERROR_AFTER_POLICY_BLOCK',
+    'BROKEN_IMAGE', 'HTTP_4XX', 'HTTP_5XX', 'NETWORK_ERROR', 'REQUEST_ABORTED', 'OBSERVATION_ERROR'})
+
+
 def _append_issue(record, category, level, message, url='', **details):
     timestamp = _now()
     issue = dict(category=category, level=level, message=sanitize_message(message), url=sanitize_url(url),
@@ -252,8 +257,16 @@ def _request_metadata(request, state, record):
                 source='FIRST_PARTY' if _origin(request.url) == _origin(record['url']) else 'THIRD_PARTY')
 
 
-def _attach_observers(page, record, context_state):
-    def policy_context():
+def _attach_observers(page, context_state):
+    """Attach once per tab; every handler resolves the *current* page record from state.
+
+    One Chromium tab per environment stays open for the whole crawl, so login
+    cookies, sessionStorage and a dismissed cover gate survive between pages.
+    """
+    def current():
+        return context_state.get('record')
+
+    def policy_context(record):
         related = [dict(url=item.get('url'), reason=item.get('message'),
                         resourceType=item.get('resourceType'), method=item.get('method'))
                    for item in record['issues'] if item['category'] == 'POLICY_BLOCKED']
@@ -261,6 +274,9 @@ def _attach_observers(page, record, context_state):
                 'relatedBlockedRequests': related[-10:]}
 
     def response_observed(response):
+        record = current()
+        if record is None:
+            return
         try:
             observation = http_observation(response.status, response.request.resource_type,
                                            _origin(response.url) == _origin(record['url']))
@@ -272,11 +288,18 @@ def _attach_observers(page, record, context_state):
             _append_issue(record, 'OBSERVATION_ERROR', 'ERROR', type(exc).__name__)
 
     def request_failed(request):
+        record = current()
+        if record is None:
+            return
         try:
             if request.url in context_state['blocked_urls']:
                 return
             failure = request.failure or 'Network failure'
             aborted = 'ERR_ABORTED' in failure.upper()
+            owner = context_state.get('request_owner', {}).pop(request, None)
+            if aborted and owner is not None and owner != record['pageId']:
+                # In-flight request of the previous page cancelled by this navigation: not this page's issue.
+                return
             runner_cancelled = aborted and record.get('_closing', False)
             metadata = _request_metadata(request, context_state, record)
             if runner_cancelled:
@@ -287,17 +310,33 @@ def _attach_observers(page, record, context_state):
         except Exception as exc:
             _append_issue(record, 'OBSERVATION_ERROR', 'ERROR', type(exc).__name__)
 
+    owners = context_state.setdefault('request_owner', {})
+
+    def request_started(request):
+        record = current()
+        if record is not None:
+            owners[request] = record['pageId']
+            if len(owners) > 2000:
+                for key in list(owners)[:1000]:
+                    owners.pop(key, None)
+
+    page.on('request', request_started)
     page.on('response', response_observed)
     page.on('requestfailed', request_failed)
+
     def page_error(exc):
-        context = policy_context()
+        record = current()
+        if record is None:
+            return
+        context = policy_context(record)
         _append_issue(record, 'JS_ERROR_AFTER_POLICY_BLOCK' if context['policyInterference'] else 'JS_ERROR',
                       'REVIEW' if context['policyInterference'] else 'FAIL', str(exc), page.url, **context)
 
     def console_error(message):
-        if message.type != 'error':
+        record = current()
+        if record is None or message.type != 'error':
             return
-        context = policy_context()
+        context = policy_context(record)
         after_block = context['policyInterference'] and ('ERR_BLOCKED_BY_CLIENT' in message.text or 'ERR_BLOCKED_BY_RESPONSE' in message.text)
         _append_issue(record, 'CONSOLE_ERROR_AFTER_POLICY_BLOCK' if after_block else 'CONSOLE_ERROR',
                       'REVIEW', message.text, page.url, **context)
@@ -305,8 +344,8 @@ def _attach_observers(page, record, context_state):
     page.on('pageerror', page_error)
     page.on('console', console_error)
     page.on('dialog', lambda dialog: dialog.dismiss())
-    page.on('download', lambda download: _append_issue(record, 'DOWNLOAD_BLOCKED', 'SKIP',
-                                                       'Download was not approved.', page.url))
+    page.on('download', lambda download: (current() is not None) and _append_issue(
+        current(), 'DOWNLOAD_BLOCKED', 'SKIP', 'Download was not approved.', page.url))
 
 
 def _network_guard(context, options, seeds, side, state, budget):
@@ -323,8 +362,29 @@ def _network_guard(context, options, seeds, side, state, budget):
                                              request.is_navigation_request(), options.get('resource_hosts', []))
         if not reason and not (host_allowed(request.url, options['allowed_hosts']) or approved_resource):
             reason = 'HOST_NOT_APPROVED'
-        if not reason and not state['manual_auth']:
-            if request.method not in ('GET', 'HEAD', 'OPTIONS'):
+        passive = request.resource_type in ('image', 'font', 'stylesheet', 'script', 'media') and request.method in ('GET', 'HEAD')
+        data_call = request.resource_type in ('xhr', 'fetch') and host_allowed(request.url, options['allowed_hosts'])
+        level = options.get('safety_level', 'strict')
+        if not reason and not state['manual_auth'] and level == 'test_account':
+            # Test-account level: writes on approved hosts are allowed; only account-breaking /
+            # paid URLs and unapproved routes are refused. Policy is logged, not silent.
+            if not passive and dangerous_action({'url': request.url}, level):
+                reason = dangerous_action({'url': request.url}, level)
+            elif request.is_navigation_request() and not (
+                    normalize_url(request.url) in seed_documents or route_allowed(request.url, options, seeds, origin_url=seed)):
+                reason = 'ROUTE_NOT_APPROVED'
+            elif request.is_navigation_request() and demo_prefix and not urlsplit(request.url).path.startswith(demo_prefix):
+                reason = 'ENVIRONMENT_BOUNDARY'
+        elif not reason and not state['manual_auth']:
+            if passive:
+                # A GET for ico_save.svg cannot mutate anything: resource URLs skip the action-word policy.
+                pass
+            elif data_call and options.get('xhr_policy', 'allow_allowed_hosts') == 'allow_allowed_hosts':
+                # Page-load data calls (often POST for read APIs) are the page's own behaviour on approved hosts.
+                # Action words in the URL (delete/save/submit...) are still refused.
+                if dangerous_action({'url': request.url}):
+                    reason = dangerous_action({'url': request.url})
+            elif request.method not in ('GET', 'HEAD', 'OPTIONS'):
                 reason = 'WRITE_REQUEST_NOT_APPROVED'
             elif dangerous_action({'url': request.url}):
                 reason = dangerous_action({'url': request.url})
@@ -353,10 +413,67 @@ def _network_guard(context, options, seeds, side, state, budget):
     context.route('**/*', guard)
 
 
+_SETTLE_JS = '''() => {
+  const spinner = [...document.querySelectorAll('[class*="loading" i],[class*="spinner" i],[class*="skeleton" i],[id*="loading" i],[aria-busy="true"]')]
+    .some(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'; });
+  const pendingImages = [...document.images].filter(img => { const r = img.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.top < innerHeight && r.bottom > 0 && !img.complete; }).length;
+  return { ready: document.readyState, height: document.documentElement.scrollHeight, nodes: document.getElementsByTagName('*').length,
+           scrollY: window.scrollY, spinner, pendingImages };
+}'''
+
+
+def _settle_before_capture(page, record, budget, options):
+    """Normalize the viewport and wait for the page to stop changing before the screenshot.
+
+    - Scroll to the top with smooth scrolling disabled, so A and B are captured at the same offset.
+    - Wait until no visible loading/spinner/skeleton element, no pending in-viewport image, and
+      document height / node count stay identical across two consecutive samples.
+    Bounded by ``capture_settle_ms`` (default 4000 ms) and the run budget; the outcome is recorded.
+    """
+    limit = min(int(options.get('capture_settle_ms', 4000)), budget.timeout(4000))
+    deadline = time.monotonic() + limit / 1000
+    try:
+        page.evaluate('() => { document.documentElement.style.scrollBehavior = "auto"; window.scrollTo(0, 0); }')
+    except Exception:
+        pass
+    previous, stable, last = None, 0, {}
+    while time.monotonic() < deadline:
+        try:
+            last = page.evaluate(_SETTLE_JS)
+        except Exception:
+            break
+        current = (last.get('height'), last.get('nodes'))
+        quiet = last.get('ready') == 'complete' and not last.get('spinner') and not last.get('pendingImages')
+        stable = stable + 1 if quiet and current == previous else 0
+        if stable >= 2:
+            break
+        previous = current
+        page.wait_for_timeout(min(150, budget.timeout(150)))
+    try:
+        if last.get('scrollY'):
+            page.evaluate('() => window.scrollTo(0, 0)')
+            page.wait_for_timeout(min(100, budget.timeout(100)))
+    except Exception:
+        pass
+    settled = stable >= 2
+    record.setdefault('readiness', {})['settled'] = settled
+    record['readiness']['settleState'] = {k: last.get(k) for k in ('ready', 'spinner', 'pendingImages', 'scrollY')}
+    if not settled:
+        record['checks'].append(check(side_of(record) + '.settle', 'REVIEW', 'CAPTURE_NOT_SETTLED',
+                                      expected='No spinner, images loaded, stable layout within the settle budget',
+                                      actual=record['readiness']['settleState'], required=False))
+        record['checks'][-1]['informational'] = True
+
+
+def side_of(record):
+    return record.get('environment') or 'a'
+
+
 def _capture(page, record, options, artifact_root, run_id, side, budget):
     folder = Path(artifact_root) / run_id / side
     folder.mkdir(parents=True, exist_ok=True)
     name = _id(record['url'])
+    _settle_before_capture(page, record, budget, options)
     private_selectors = ['input[type=password]', '[data-qa-private]', *options.get('private_mask_selectors', [])]
     private_masks = [page.locator(selector) for selector in private_selectors]
     try:
@@ -433,7 +550,7 @@ def _capture(page, record, options, artifact_root, run_id, side, budget):
 def _action_guard(page, record, options, budget, action):
     reason = budget.reason()
     if not reason:
-        reason = dangerous_action(action)
+        reason = dangerous_action(action, options.get('safety_level', 'strict'))
     if not reason and action.get('url'):
         if not host_allowed(action['url'], options['allowed_hosts']):
             reason = 'HOST_NOT_APPROVED'
@@ -456,17 +573,217 @@ def _action_guard(page, record, options, budget, action):
     return True
 
 
+_SMOKE_FILL_JS = '''([selector, marker]) => {
+  const control = document.querySelector(selector);
+  const form = control && control.closest('form');
+  if (!form) return 0;
+  let filled = 0;
+  for (const el of form.querySelectorAll('input, textarea, select')) {
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0 || el.disabled || el.readOnly) continue;
+    const type = (el.type || '').toLowerCase();
+    if (el.tagName === 'SELECT') { if (el.selectedIndex <= 0 && el.options.length > 1) { el.selectedIndex = 1; filled++; } continue; }
+    if (['hidden', 'submit', 'button', 'image', 'file', 'password', 'checkbox', 'radio'].includes(type)) continue;
+    if (el.value) continue;
+    el.value = type === 'email' ? 'qa-auto@test.local' : type === 'number' ? '1' : type === 'tel' ? '01000000000' : marker;
+    el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true }));
+    filled++;
+  }
+  return filled;
+}'''
+
+
+def _fill_form_for_smoke(page, selector, options):
+    """Fill empty visible fields of the control's form with a QA marker (test-account level only)."""
+    try:
+        return int(page.evaluate(_SMOKE_FILL_JS, [selector, options.get('smoke_fill_text', 'QA자동테스트')]) or 0)
+    except Exception:
+        return 0
+
+
+def _smoke_actions(page, record, options, budget, side, register):
+    """Click discovered in-page controls (no href, not dangerous) with one generic expectation.
+
+    Expectation: the page stays on the approved origin, no new JavaScript error is
+    raised and the document still responds. That is a smoke contract, not a
+    functional PASS; it finds controls that throw or navigate away.
+    """
+    limit = int(options.get('smoke_action_limit', 20))
+    seed_origin = _origin(record['url'])
+    done = 0
+    for action in list(record['actions']):
+        if done >= limit or budget.reason():
+            break
+        if budget.actions >= budget.maximum or budget.actions - options.get('_side_action_start', 0) >= options.get('_side_action_limit', budget.maximum):
+            # Smoke clicks are opportunistic: an exhausted action budget ends them silently.
+            record['coverage']['smokeBudgetExhausted'] = True
+            break
+        if action.get('href') or action['reason'] not in ('UNKNOWN_ACTION',):
+            continue
+        level = options.get('safety_level', 'strict')
+        if not action.get('visible', True) or action.get('disabled') or dangerous_action(action, level):
+            continue
+        if not str(action.get('label') or '').strip():
+            # Icon-only / overlay controls with no accessible name are not worth a blind click.
+            continue
+        tag, kind = action.get('tag', ''), action.get('type', '').lower()
+        submits = tag == 'input' or kind in ('submit', 'image') or (tag == 'button' and kind != 'button')
+        # Strict: a <button> without an explicit type submits its form, so only explicit type=button
+        # or non-form controls are smoke-clicked. Test-account level also submits forms, after
+        # filling empty visible text fields with a QA marker so validation does not stop the submit.
+        if submits and level != 'test_account':
+            continue
+        if not _action_guard(page, record, options, budget, action):
+            action.update(state='BLOCKED', reason=budget.reason() or 'ACTION_LIMIT_REACHED')
+            continue
+        before_url, before_errors = page.url, sum(1 for i in record['issues'] if i['category'] in ('JS_ERROR', 'JS_ERROR_AFTER_POLICY_BLOCK'))
+        check_id = side + '.smoke.' + action['id']
+        try:
+            filled = 0
+            if submits:
+                filled = _fill_form_for_smoke(page, action['selector'], options)
+                if filled:
+                    action['smokeFilledFields'] = filled
+            target = page.locator(action['selector']).first
+            try:
+                target.click(timeout=budget.timeout(1500))
+            except Exception as click_error:
+                if 'Timeout' in type(click_error).__name__:
+                    # Covered by another element or not actionable right now: evidence, not a verdict.
+                    action.update(state='SKIP', reason='SMOKE_NOT_CLICKABLE')
+                    record['checks'].append(check(check_id, 'SKIP', 'ACTION_SMOKE_NOT_CLICKABLE',
+                                                  expected='Control actionable within 1.5s', actual={'label': action.get('label')}, required=False))
+                    continue
+                raise
+            page.wait_for_timeout(min(400, budget.timeout(400)))
+            budget.completed += 1
+            done += 1
+            after_errors = sum(1 for i in record['issues'] if i['category'] in ('JS_ERROR', 'JS_ERROR_AFTER_POLICY_BLOCK'))
+            left_origin = _origin(page.url) != seed_origin
+            responsive = page.evaluate('() => document.readyState !== "loading"')
+            if left_origin or not responsive:
+                action.update(state='EXECUTED', allowed=True, reason='SMOKE_ACTION')
+                record['checks'].append(check(check_id, 'FAIL', 'ACTION_SMOKE_LEFT_SCOPE' if left_origin else 'ACTION_SMOKE_UNRESPONSIVE',
+                                              expected='Control keeps the page on the approved origin and responsive',
+                                              actual={'label': action.get('label'), 'url': sanitize_url(page.url)}))
+            elif after_errors > before_errors:
+                action.update(state='EXECUTED', allowed=True, reason='SMOKE_ACTION')
+                record['checks'].append(check(check_id, 'FAIL', 'ACTION_SMOKE_JS_ERROR',
+                                              expected='No new JavaScript error after click',
+                                              actual={'label': action.get('label'), 'newErrors': after_errors - before_errors}))
+            else:
+                action.update(state='EXECUTED', allowed=True, reason='SMOKE_ACTION')
+                record['checks'].append(check(check_id, 'PASS', 'ACTION_SMOKE_OK',
+                                              expected='Click keeps origin, no JS error, document responsive',
+                                              actual={'label': action.get('label'), 'navigated': page.url != before_url,
+                                                      'submitted': bool(submits), 'filledFields': filled}))
+            discovered = _discover(page, options, record, side)
+            if discovered is not None:
+                register(discovered['candidates'])
+            if page.url != before_url:
+                page.goto(before_url, wait_until='domcontentloaded', timeout=budget.timeout())
+        except Exception as exc:
+            action['state'] = 'ERROR'
+            # A smoke click that could not be dispatched/reset is evidence for a person, not a row verdict.
+            record['checks'].append(check(check_id, 'REVIEW', 'ACTION_SMOKE_ERROR', expected='Click dispatch and reset',
+                                          actual={'label': action.get('label'), 'error': type(exc).__name__}, required=False))
+            try:
+                if page.url != before_url:
+                    page.goto(before_url, wait_until='domcontentloaded', timeout=budget.timeout())
+            except Exception:
+                break
+
+
+def _dismiss_overlays(page, record, options, side, budget):
+    """Close marketing popups/layers before capture; each close is recorded, never assumed."""
+    closed = []
+    for selector in list(options.get('dismiss_selectors', []))[:10]:
+        try:
+            locator = page.locator(selector).first
+            if locator.count() and locator.is_visible():
+                locator.click(timeout=budget.timeout(3000))
+                page.wait_for_timeout(min(250, budget.timeout(250)))
+                closed.append(selector)
+        except Exception:
+            record['checks'].append(check(side + '.dismiss', 'REVIEW', 'DISMISS_SELECTOR_FAILED',
+                                          expected='Overlay close control clickable', actual=selector))
+    if closed:
+        record['dismissed'] = closed
+        record['checks'].append(check(side + '.dismiss', 'PASS', 'OVERLAYS_DISMISSED',
+                                      expected='Configured overlays closed before capture', actual=closed, required=False))
+
+
+def _flexible_text(text):
+    """'모바일웹으로 계속하기|모바일 웹으로 이동하기' → regex ignoring whitespace, alternatives with |."""
+    import re as _re
+    parts = [p.strip() for p in str(text).split('|') if p.strip()]
+    pattern = '|'.join(r'\s*'.join(_re.escape(ch) for ch in part.replace(' ', '')) for part in parts)
+    return _re.compile(pattern, _re.I)
+
+
+def _apply_entry_action(page, record, options, side, budget):
+    """Dismiss a cover/landing gate on the start page with one approved click.
+
+    Example: a legacy mobile SPA opens ``/#/`` as ``/#/coverPage`` and only shows
+    the real home after "모바일 웹으로 이동하기". The click is recorded as evidence
+    and the resulting URL becomes the start page for discovery. Route policy is
+    unchanged: a full navigation to an unapproved path is still blocked.
+    """
+    entry = options.get('entry') or {}
+    if not entry or entry.get('sides', 'both') not in ('both', side):
+        return
+    pattern = entry.get('urlPattern')
+    if pattern and not (fnmatch.fnmatchcase(page.url, pattern) or fnmatch.fnmatchcase(page_key(page.url), pattern)):
+        if record.get('depth', 0) == 0:
+            record['checks'].append(check(side + '.entry', 'SKIP', 'ENTRY_ACTION_NOT_APPLICABLE',
+                                          expected='urlPattern ' + pattern, actual=sanitize_url(page.url), required=False))
+        return
+    try:
+        locator = page.locator(entry['selector'])
+        if entry.get('text'):
+            locator = locator.filter(has_text=_flexible_text(entry['text']))
+        locator = locator.first
+        if locator.count() == 0 or not locator.is_visible():
+            record['checks'].append(check(side + '.entry', 'SKIP', 'ENTRY_ACTION_NOT_PRESENT',
+                                          expected='Cover/landing gate element visible', actual='not visible', required=False))
+            return
+        before = page.url
+        locator.click(timeout=budget.timeout(5000))
+        try:
+            page.wait_for_load_state('load', timeout=budget.timeout(8000))
+        except Exception:
+            pass
+        page.wait_for_timeout(min(500, budget.timeout(500)))
+        after = page.url
+        if after == before:
+            record['checks'].append(check(side + '.entry', 'REVIEW', 'ENTRY_ACTION_NO_NAVIGATION',
+                                          expected='URL changes after the gate is dismissed', actual=sanitize_url(after)))
+            return
+        record['entryAction'] = {'selector': entry['selector'], 'before': sanitize_url(before), 'after': sanitize_url(after)}
+        record['checks'].append(check(side + '.entry', 'PASS', 'ENTRY_ACTION_APPLIED',
+                                      expected='Cover/landing gate dismissed once', actual=f'{sanitize_url(before)} → {sanitize_url(after)}'))
+    except Exception as exc:
+        record['checks'].append(check(side + '.entry', 'REVIEW', 'ENTRY_ACTION_FAILED',
+                                      expected='One approved click on the start page', actual=type(exc).__name__))
+
+
 def _visit(context, url, side, depth, options, artifact_root, run_id, budget, state):
     record = dict(url=url, finalUrl=url, title='', heading='', structure='', statusCode=None,
                   issues=[], checks=[], screenshot=None, screenshotFile=None, regions=[], actions=[],
                   depth=depth, observedAt=_now(), navigated=False, coverage={}, runId=run_id,
                   environment=side, pageId=_id(side + url), captureReady=False, readiness={})
     state['record'] = record
-    page = context.new_page()
-    _attach_observers(page, record, state)
+    page = _environment_page(context, state)
     try:
         response = page.goto(url, wait_until='domcontentloaded', timeout=budget.timeout())
-        record['statusCode'] = response.status if response else None
+        spa_route = False
+        if response is None and state.get('document_status') and _origin(page.url) == state.get('document_origin'):
+            # Same-document (hash) navigation in the persistent tab: the loaded document already
+            # answered; the route itself has no HTTP response to observe.
+            spa_route = True
+        elif response is not None:
+            state['document_status'], state['document_origin'] = response.status, _origin(page.url)
+        record['statusCode'] = response.status if response else (state.get('document_status') if spa_route else None)
         record['finalUrl'] = page.url
         if response and response.status in (401, 403):
             record['checks'].append(check(side + '.document', 'BLOCKED',
@@ -481,6 +798,9 @@ def _visit(context, url, side, depth, options, artifact_root, run_id, budget, st
         elif response:
             record['checks'].append(check(side + '.document', 'PASS', 'DOCUMENT_REACHABLE',
                                           expected='HTTP < 400', actual=response.status))
+        elif spa_route:
+            record['checks'].append(check(side + '.document', 'PASS', 'DOCUMENT_REACHABLE',
+                                          expected='HTTP < 400 (loaded document)', actual=f"{state['document_status']} · SPA same-document route"))
         else:
             # Hash-only navigation does not necessarily have a document response.
             record['checks'].append(check(side + '.document', 'REVIEW', 'DOCUMENT_STATUS_UNAVAILABLE',
@@ -499,12 +819,24 @@ def _visit(context, url, side, depth, options, artifact_root, run_id, budget, st
             record['checks'].append(check(side + '.ready', 'REVIEW', 'LOAD_NOT_CONFIRMED',
                                           expected='Load event within capture budget', actual='timeout'))
         fonts_ready = page.evaluate('() => Promise.race([(document.fonts?.ready || Promise.resolve()).then(() => true), new Promise(resolve => setTimeout(() => resolve(false), 1500))])')
-        record['readiness'] = {'load': load_ready, 'fonts': bool(fonts_ready)}
-        record['captureReady'] = bool(load_ready and fonts_ready and response and response.status < 400)
+        network_idle = False
+        try:
+            page.wait_for_load_state('networkidle', timeout=budget.timeout(min(4000, int(options.get('network_idle_ms', 4000)))))
+            network_idle = True
+        except Exception:
+            pass
+        record['readiness'] = {'load': load_ready, 'fonts': bool(fonts_ready), 'networkIdle': network_idle}
+        record['captureReady'] = bool(load_ready and fonts_ready and (spa_route or (response and response.status < 400)))
         if not fonts_ready:
             record['checks'].append(check(side + '.fonts', 'REVIEW', 'FONTS_NOT_CONFIRMED',
                                           expected='Fonts ready before capture', actual='timeout'))
         page.wait_for_timeout(min(150, budget.timeout(150)))
+        if options.get('entry') and (depth == 0 or options['entry'].get('urlPattern')):
+            # A cover gate can swallow any route until it is dismissed, so with a urlPattern
+            # the entry action may apply on deeper pages too (it skips when the pattern misses).
+            _apply_entry_action(page, record, options, side, budget)
+        if options.get('dismiss_selectors'):
+            _dismiss_overlays(page, record, options, side, budget)
         info = _discover(page, options, record, side)
         if info is None:
             return record
@@ -554,13 +886,25 @@ def _visit(context, url, side, depth, options, artifact_root, run_id, budget, st
                     action.update(state='BLOCKED', reason=budget.reason() or 'ACTION_LIMIT_REACHED')
                     continue
                 before = page.url
+                errors_before = sum(1 for i in record['issues'] if i['category'] in ('JS_ERROR', 'JS_ERROR_AFTER_POLICY_BLOCK'))
                 try:
                     page.locator(rule['selector']).click(timeout=budget.timeout(5000))
                     budget.completed += 1
                     action['state'] = 'EXECUTED'
-                    # Successful click dispatch is not evidence of expected application behavior.
-                    record['checks'].append(check(side + '.click.' + action['id'], 'REVIEW', 'ACTION_EXPECTATION_MISSING',
-                                                  expected='A configured behavior assertion', actual='Click dispatched', required=False))
+                    if options.get('smoke_actions'):
+                        # Smoke contract: same origin, no new JS error, document responsive.
+                        new_errors = sum(1 for i in record['issues'] if i['category'] in ('JS_ERROR', 'JS_ERROR_AFTER_POLICY_BLOCK')) - errors_before
+                        left_origin = _origin(page.url) != _origin(record['url'])
+                        if left_origin or new_errors > 0:
+                            record['checks'].append(check(side + '.click.' + action['id'], 'FAIL', 'ACTION_SMOKE_LEFT_SCOPE' if left_origin else 'ACTION_SMOKE_JS_ERROR',
+                                                          expected='Approved click keeps origin and raises no JS error', actual={'url': sanitize_url(page.url), 'newErrors': new_errors}))
+                        else:
+                            record['checks'].append(check(side + '.click.' + action['id'], 'PASS', 'ACTION_SMOKE_OK',
+                                                          expected='Approved click keeps origin, no JS error, document responsive', actual='Click dispatched'))
+                    else:
+                        # Successful click dispatch is not evidence of expected application behavior.
+                        record['checks'].append(check(side + '.click.' + action['id'], 'REVIEW', 'ACTION_EXPECTATION_MISSING',
+                                                      expected='A configured behavior assertion', actual='Click dispatched', required=False))
                     discovered = _discover(page, options, record, side)
                     if discovered is None:
                         return record
@@ -572,6 +916,8 @@ def _visit(context, url, side, depth, options, artifact_root, run_id, budget, st
                     record['checks'].append(check(side + '.click.' + action['id'], 'ERROR', 'ACTION_OR_RESET_ERROR',
                                                   actual=type(exc).__name__))
                     break
+        if options.get('smoke_actions') and options.get('mode') != 'discovery':
+            _smoke_actions(page, record, options, budget, side, register)
         # Capture the settled baseline state before scenario actions mutate local UI.
         record['_active_scenario'], record['_active_step'] = 'engine', 'capture'
         if any(item['category'] in ('POLICY_BLOCKED', 'EXECUTION_BLOCKED') for item in record['issues']):
@@ -652,24 +998,68 @@ def _visit(context, url, side, depth, options, artifact_root, run_id, budget, st
             for key in ('href', 'pageUrl', 'formAction'):
                 if action.get(key):
                     action[key] = sanitize_url(action[key])
+        lenient = options.get('observation_mode', 'strict') == 'lenient'
         for issue in record['issues']:
-            item = check(side + '.observation.' + issue['observationId'], issue['level'],
+            level = issue['level']
+            informational = False
+            if lenient and level in ('FAIL', 'REVIEW') and issue['category'] in _INFORMATIONAL_CATEGORIES:
+                # Real sites emit console noise and third-party 404s constantly; in lenient
+                # mode they are kept as evidence under "기타" and do not decide the row status.
+                informational = True
+            item = check(side + '.observation.' + issue['observationId'], level,
                          issue['category'], expected='Healthy required resources / review optional observations',
                          actual=issue['message'], evidence=[issue['url']] if issue['url'] else [],
                          scenario_id=issue.get('scenarioId') or 'engine', step_id=issue.get('stepId') or 'observe',
-                         required=issue['level'] != 'SKIP')
+                         required=level != 'SKIP' and not informational)
             item['observation'] = dict(issue)
+            if informational:
+                item['informational'] = True
             record['checks'].append(item)
         for item in record['checks']:
             item.setdefault('environment', side)
             item.setdefault('pageId', record['pageId'])
             item.setdefault('timestamp', _now())
-        try:
-            record['_closing'] = True
-            page.close()
-        finally:
-            state['record'] = None
+        # The tab stays open: in-flight requests aborted by the next navigation are
+        # attributed to no record (the previous page is already finalized).
+        record['_closing'] = True
+        state['record'] = None
     return record
+
+
+def _route_style(seed):
+    parts = urlsplit(seed)
+    return 'hash' if parts.fragment.startswith('/') else 'path'
+
+
+def _translate_route(url, from_seed, to_seed):
+    """Move a route between a path-routed app and a hash-routed SPA of the same product.
+
+    dev2 ``/educourse/middle`` ↔ legacy ``/#/educourse/middle``; the start page shell
+    (``/`` vs ``/#/``) is taken from the target seed. Query strings follow the route.
+    """
+    parts, target = urlsplit(url), urlsplit(to_seed)
+    source_style, target_style = _route_style(from_seed), _route_style(to_seed)
+    if source_style == 'hash':
+        route, _, query = parts.fragment.partition('?')
+        route = route or '/'
+        query = query or parts.query
+    else:
+        route, query = parts.path or '/', parts.query
+    if target_style == 'hash':
+        shell = target.path or '/'
+        fragment = route + ('?' + query if query else '')
+        return urlunsplit((target.scheme, target.netloc, shell, '', fragment))
+    return urlunsplit((target.scheme, target.netloc, route, query, ''))
+
+
+def _environment_page(context, state):
+    """One tab per environment context, created lazily and reused for login, gate and every visit."""
+    page = state.get('page')
+    if page is None or page.is_closed():
+        page = context.new_page()
+        _attach_observers(page, state)
+        state['page'] = page
+    return page
 
 
 def _skipped_page(url, side, reason, depth=0, *, status=None, actual=None):
@@ -677,6 +1067,108 @@ def _skipped_page(url, side, reason, depth=0, *, status=None, actual=None):
                 screenshot=None, screenshotFile=None, issues=[], regions=[], actions=[], navigated=False,
                 depth=depth, checks=[check(side + '.visit', status or unexecuted_status(reason), reason,
                                           expected='Planned page visit', actual=actual)], coverage={})
+
+
+_LOGIN_LINK = 'a:has-text("로그인"), button:has-text("로그인"), [role=button]:has-text("로그인"), a:has-text("Login"), a:has-text("login"), a:has-text("Sign in"), a[href*="login" i], a[href*="signin" i]'
+
+
+_LOGIN_ROUTES = ('/login', '/#/login', '/member/login', '/members/login', '/user/login', '/users/login',
+                 '/signin', '/sign-in', '/auth/login', '/login.do', '/member/login.do', '/#/member/login')
+
+
+def _find_login_form(page, budget, options=None, side='a'):
+    """Locate (username, password, submit) without configuration.
+
+    1. A visible password field on the current page wins.
+    2. Else follow a visible 로그인/login link or button once.
+    3. Else use a hidden login link's href (mobile menus hide it in a drawer).
+    4. Else try well-known login routes on the start origin.
+    After each navigation a configured cover gate is dismissed again if it reappears.
+    The password field anchors the form; the username is the nearest visible
+    text/email/tel input before it; submit is the form's submit control or a
+    로그인-labelled button, else None (Enter is pressed on the password field).
+    """
+    options = options or {}
+
+    def settle():
+        try:
+            page.wait_for_load_state('load', timeout=budget.timeout(8000))
+        except Exception:
+            pass
+        page.wait_for_timeout(min(400, budget.timeout(400)))
+        if options.get('entry'):
+            _apply_entry_action(page, {'checks': [], 'depth': 0, 'url': page.url}, options, side, budget)
+
+    def password_field():
+        candidates = page.locator('input[type=password]')
+        for index in range(min(candidates.count(), 5)):
+            item = candidates.nth(index)
+            if item.is_visible():
+                return item
+        return None
+
+    password = password_field()
+    if password is None:
+        link = page.locator(_LOGIN_LINK).first
+        if link.count() and link.is_visible():
+            link.click(timeout=budget.timeout(5000))
+            settle()
+            password = password_field()
+    if password is None:
+        href = page.evaluate('''() => {
+            const el = [...document.querySelectorAll('a[href]')].find(a => /로그인|login|signin|sign-in/i.test((a.textContent || '') + ' ' + a.getAttribute('href')));
+            return el ? el.href : null; }''')
+        if href and host_allowed(href, options.get('allowed_hosts', [urlsplit(page.url).hostname])):
+            page.goto(href, wait_until='domcontentloaded', timeout=budget.timeout(15000))
+            settle()
+            password = password_field()
+    if password is None:
+        origin = urlsplit(page.url)
+        for route in _LOGIN_ROUTES:
+            if budget.reason():
+                break
+            candidate = urlunsplit((origin.scheme, origin.netloc, route.split('#')[0] or '/', '', route.partition('#')[2]))
+            try:
+                response = page.goto(candidate, wait_until='domcontentloaded', timeout=budget.timeout(10000))
+            except Exception:
+                continue
+            if response is not None and response.status >= 400:
+                continue
+            settle()
+            password = password_field()
+            if password is not None:
+                break
+    if password is None:
+        return None
+    username = page.evaluate_handle('''pw => {
+        const inputs = [...document.querySelectorAll('input')];
+        const visible = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+        const before = inputs.slice(0, inputs.indexOf(pw)).reverse();
+        return before.find(el => ['text', 'email', 'tel', 'number', ''].includes((el.type || '').toLowerCase()) && visible(el)) || null;
+    }''', password.element_handle())
+    if username.as_element() is None:
+        return None
+    submit = None
+    form_submit = password.locator('xpath=ancestor::form[1]//button[not(@type="button")] | ancestor::form[1]//input[@type="submit"]').first
+    labelled = page.locator('button:has-text("로그인"), input[type=submit][value*="로그인"], [role=button]:has-text("로그인"), a:has-text("로그인"), button:has-text("Login"), button:has-text("Sign in")').first
+    for candidate in (form_submit, labelled):
+        try:
+            if candidate.count() and candidate.is_visible():
+                submit = candidate
+                break
+        except Exception:
+            continue
+    return _handle_locator(page, username), password, submit
+
+
+def _handle_locator(page, handle):
+    """Wrap an element handle in a locator-like object exposing fill()."""
+    class _Wrapped:
+        def __init__(self, element):
+            self.element = element
+        def fill(self, value, timeout=None):
+            self.element.fill(value, timeout=timeout)
+    return _Wrapped(handle.as_element())
 
 
 def _test_account_login(context, side, options, budget, state):
@@ -697,15 +1189,37 @@ def _test_account_login(context, side, options, budget, state):
     if not host_allowed(target, options['allowed_hosts']):
         return check(side + '.login', 'BLOCKED', 'LOGIN_HOST_NOT_APPROVED',
                      expected='Login URL host in allowedHosts', actual=sanitize_url(target)), None
-    page = context.new_page()
+    page = _environment_page(context, state)
     state['manual_auth'] = True  # auth phase: the network guard permits the form POST on approved hosts
     try:
         page.goto(target, wait_until='domcontentloaded', timeout=budget.timeout(20000))
-        username, password = page.locator(login['usernameSelector']).first, page.locator(login['passwordSelector']).first
+        try:
+            page.wait_for_load_state('load', timeout=budget.timeout(8000))
+        except Exception:
+            pass
+        auto = not login.get('usernameSelector')
+        if options.get('entry'):
+            # Mobile sites gate the login page behind /coverPage too: dismiss it first, same tab.
+            gate_record = {'checks': [], 'depth': 0, 'url': page.url}
+            _apply_entry_action(page, gate_record, options, side, budget)
+            state['login_gate'] = [c['reason_code'] for c in gate_record['checks']]
+        if auto:
+            form = _find_login_form(page, budget, options, side)
+            if form is None:
+                return check(side + '.login', 'BLOCKED', 'LOGIN_FORM_NOT_FOUND',
+                             expected='A visible password field (after following a 로그인/login link if needed)',
+                             actual=sanitize_url(page.url)), credentials
+            username, password, submit = form
+        else:
+            username, password = page.locator(login['usernameSelector']).first, page.locator(login['passwordSelector']).first
+            submit = page.locator(login['submitSelector']).first
         username.fill(credentials.username, timeout=budget.timeout(5000))
         password.fill(credentials.password, timeout=budget.timeout(5000))
         before = page.url
-        page.locator(login['submitSelector']).first.click(timeout=budget.timeout(5000))
+        if submit is not None:
+            submit.click(timeout=budget.timeout(5000))
+        else:
+            password.press('Enter', timeout=budget.timeout(5000))
         try:
             page.wait_for_load_state('load', timeout=budget.timeout(10000))
         except Exception:
@@ -716,19 +1230,21 @@ def _test_account_login(context, side, options, budget, state):
             success = page.locator(login['successSelector']).first.is_visible() and not failure_visible
             basis = 'successSelector'
         else:
-            still_on_form = page.locator(login['passwordSelector']).count() > 0 and page.url == before
-            success = not failure_visible and not still_on_form
-            basis = 'password field gone or URL changed'
+            password_fields = page.locator(login['passwordSelector']) if not auto else page.locator('input[type=password]:visible')
+            still_on_form = password_fields.count() > 0 and page.url == before
+            logged_in_marker = page.locator('text=/로그아웃|logout|마이페이지|my ?page/i').first.count() > 0
+            success = not failure_visible and (logged_in_marker or not still_on_form)
+            basis = 'logout/마이페이지 marker, or password field gone / URL changed'
         if success:
             return check(side + '.login', 'PASS', 'TEST_ACCOUNT_LOGIN_OK', expected='Login success evidence: ' + basis,
-                         actual='Signed in with a locally stored test account (' + credentials.source.split(':')[0] + ')'), credentials
+                         actual={'credentials': credentials.source.split(':')[0], 'loginUrl': sanitize_url(before),
+                                 'afterUrl': sanitize_url(page.url), 'gate': state.get('login_gate') or []}), credentials
         return check(side + '.login', 'BLOCKED', 'LOGIN_FAILED', expected='Login success evidence: ' + basis,
                      actual='Failure marker visible' if failure_visible else 'Login form still present'), credentials
     except Exception as exc:
         return check(side + '.login', 'ERROR', 'LOGIN_STEP_ERROR', expected='Login form interaction', actual=type(exc).__name__), credentials
     finally:
         state['manual_auth'] = False
-        page.close()
 
 
 def _crawl(browser, side, options, artifact_root, run_id, progress, budget, auth_gate):
@@ -748,6 +1264,22 @@ def _crawl(browser, side, options, artifact_root, run_id, progress, budget, auth
     pages, deferred = OrderedDict(), []
     trails = {normalize_url(seed): ['start-page']}
     queue, seen = deque([(seed, 0)]), {normalize_url(seed)}
+    mirror_paths, mirrored_identities = set(), set()
+    for mirrored in options.get('_mirror_urls', []):
+        try:
+            identity = normalize_url(mirrored['url'])
+        except (ValueError, KeyError, TypeError):
+            continue
+        if identity in seen:
+            continue
+        seen.add(identity)
+        mirrored_identities.add(identity)
+        # Keep A's menu trail so semantic corroboration (same trail + heading) still applies.
+        trails[identity] = list(mirrored.get('trail') or ['start-page'])
+        queue.append((identity, int(mirrored.get('depth') or 1)))
+        parts = urlsplit(identity)
+        mirror_paths.add((parts.path or '/') + ('#' + parts.fragment.split('?', 1)[0] if parts.fragment else ''))
+    options['_mirror_paths'] = mirror_paths
     def deferred_page(url, reason, depth):
         record = _skipped_page(url, side, reason, depth)
         record['navigationTrail'] = trails.get(normalize_url(url), [])
@@ -758,7 +1290,12 @@ def _crawl(browser, side, options, artifact_root, run_id, progress, budget, auth
                 return OrderedDict([(seed, _skipped_page(seed, side, 'MANUAL_AUTH_REQUIRED'))]), [], state
             state['manual_auth'] = True
             try:
-                auth_gate(side, context, seed)
+                try:
+                    auth_gate(side, context, seed, _environment_page(context, state))
+                except TypeError as exc:
+                    if 'positional' not in str(exc):
+                        raise
+                    auth_gate(side, context, seed)
             except InterruptedError:
                 state['auth_cancelled'] = True
                 return OrderedDict([(seed, _skipped_page(seed, side, 'CANCELLED'))]), [], state
@@ -792,6 +1329,8 @@ def _crawl(browser, side, options, artifact_root, run_id, progress, budget, auth
             progress(f'{side.upper()}: {len(pages) + 1}/{options.get("max_pages", 5)} {sanitize_url(url)}')
             record = _visit(context, url, side, depth, options, artifact_root, run_id, budget, state)
             record['navigationTrail'] = trails.get(normalize_url(url), [])
+            if normalize_url(url) in mirrored_identities:
+                record['mirroredFromBaseline'] = True
             if login_check is not None:
                 login_check = dict(login_check, environment=side, pageId=record['pageId'], timestamp=_now())
                 record['checks'].insert(0, login_check)
@@ -970,7 +1509,31 @@ def run_scan(options, run_id, artifact_root, progress, cancelled, auth_gate=None
                 b = OrderedDict([(options['candidate_url'], _skipped_page(options['candidate_url'], 'b', reason))])
                 b_skip, b_state = [], {'blocked': []}
             else:
-                b, b_skip, b_state = _crawl(browser, 'b', options, artifact_root, run_id, progress, budget, auth_gate)
+                # Pair-first crawl: B visits the routes A actually reached (translated to B's origin)
+                # before its own link discovery, so most rows pair instead of splitting into A-only/B-only.
+                mirror = []
+                a_seed, b_seed = urlsplit(options['baseline_url']), urlsplit(options['candidate_url'])
+                from .matching import equivalent_route_key
+                # Mirroring only makes sense for "same app on another host" pairs: different hosts whose
+                # start pages are the same route. Same-host pairs (demo /a vs /b) keep independent crawls.
+                mirror_enabled = (bool(options.get('mirror_routes', True)) and a_seed.netloc != b_seed.netloc
+                                  and equivalent_route_key(options['baseline_url']) == equivalent_route_key(options['candidate_url']))
+                for page in (a.values() if mirror_enabled else []):
+                    if not page.get('navigated'):
+                        continue
+                    for source in (page.get('finalUrl'), page.get('url')):
+                        if not source:
+                            continue
+                        parts = urlsplit(source)
+                        if (parts.scheme, parts.netloc) != (a_seed.scheme, a_seed.netloc):
+                            continue
+                        if readonly_navigation_reason({'url': source}, options.get('safety_level', 'strict')) and parts.path not in ('', '/'):
+                            continue
+                        mirror.append({'url': _translate_route(source, options['baseline_url'], options['candidate_url']),
+                                       'trail': page.get('navigationTrail') or ['start-page'], 'depth': max(1, int(page.get('depth') or 1))})
+                        break
+                b_options = dict(options, _mirror_urls=mirror)
+                b, b_skip, b_state = _crawl(browser, 'b', b_options, artifact_root, run_id, progress, budget, auth_gate)
         finally:
             browser.close()
     progress('Comparing route mappings and region evidence' if comparison else 'Summarizing independent environment assertions')
@@ -981,11 +1544,22 @@ def run_scan(options, run_id, artifact_root, progress, cancelled, auth_gate=None
     rows = (_result_rows(pairs, options, artifact_root, run_id)
             if comparison else _single_rows(a, options))
     for side, deferred in (('a', a_skip), ('b', b_skip)):
+        # One summary row per (environment, reason): every unvisited page stays in the inventory,
+        # but hundreds of "page limit reached" rows would bury the real findings.
+        groups = OrderedDict()
         for page in deferred:
-            rows.append(dict(id=_id(side + page['url'] + '.skip'), key=page_key(sanitize_url(page['url'])), region_id='page',
-                             status=aggregate_status(page['checks']), flags=[page['checks'][0]['reason_code']], checks=page['checks'],
-                             baseline=_safe_record(page) if side == 'a' else None,
-                             candidate=_safe_record(page) if side == 'b' else None, visual=None,
+            groups.setdefault(page['checks'][0]['reason_code'], []).append(page)
+        for reason, pages_for_reason in groups.items():
+            first = pages_for_reason[0]
+            urls = [page_key(sanitize_url(page['url'])) for page in pages_for_reason]
+            summary_check = dict(first['checks'][0], check_id=side + '.visit', expected='Planned page visits',
+                                 actual={'unvisitedPages': len(urls), 'examples': urls[:20]})
+            record = dict(first, url=first['url'], title=f'{len(urls)}개 페이지 미방문 · {reason}', checks=[summary_check])
+            rows.append(dict(id=_id(side + reason + '.deferred'), key=f'__unvisited__/{side}/{reason.lower()}', region_id='page',
+                             status=aggregate_status([summary_check]), flags=[reason], checks=[summary_check],
+                             unvisitedPages=urls, unvisitedCount=len(urls),
+                             baseline=_safe_record(record) if side == 'a' else None,
+                             candidate=_safe_record(record) if side == 'b' else None, visual=None,
                              match={'method': 'NOT_EXECUTED' if comparison else 'SINGLE_ENVIRONMENT', 'confidence': 'LOW', 'approved': False},
                              review={'status': 'UNREVIEWED', 'revision': 0, 'events': []}))
     observed = list(a.values()) + list(b.values())
@@ -1021,7 +1595,11 @@ def run_scan(options, run_id, artifact_root, progress, cancelled, auth_gate=None
     rules.update(visual_threshold=options.get('visual_threshold', 2), rule_version='v2.3',
                  pair_start_pages=bool(options.get('pair_start_pages', False)),
                  route_equivalence=bool(options.get('route_equivalence', True)),
-                 login_form={key: value for key, value in (options.get('login') or {}).items()} or None)
+                 login_form={key: value for key, value in (options.get('login') or {}).items()} or None,
+                 entry=options.get('entry') or None, xhr_policy=options.get('xhr_policy', 'allow_allowed_hosts'),
+                 dismiss_selectors=options.get('dismiss_selectors', []), observation_mode=options.get('observation_mode', 'strict'),
+                 smoke_actions=bool(options.get('smoke_actions')), smoke_action_limit=int(options.get('smoke_action_limit', 20)),
+                 safety_level=options.get('safety_level', 'strict'))
     checksum = lambda value: sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode('utf-8')).hexdigest()
     incomplete = bool(blocked_requests or a_skip or b_skip or budget.reason()
                       or any(c['status'] in ('BLOCKED', 'ERROR') and c.get('required', True) for c in unique_checks.values()))
@@ -1044,6 +1622,9 @@ def run_scan(options, run_id, artifact_root, progress, cancelled, auth_gate=None
                               environmentIds={'a': options.get('baseline_environment_id', 'custom'),
                                               'b': options.get('candidate_environment_id', 'custom')} if comparison else {'a': options.get('baseline_environment_id', 'custom')},
                               pairStartPages=bool(start_pair), routeEquivalence=bool(options.get('route_equivalence', True)),
+                              entry=options.get('entry') or None, xhrPolicy=options.get('xhr_policy', 'allow_allowed_hosts'),
+                              dismissSelectors=options.get('dismiss_selectors', []), observationMode=options.get('observation_mode', 'strict'),
+                              smokeActions=bool(options.get('smoke_actions')), safetyLevel=options.get('safety_level', 'strict'),
                               login={'method': 'MANUAL' if options.get('manual_login') else 'TEST_ACCOUNT' if options.get('login') else 'NONE',
                                      'form': {key: value for key, value in (options.get('login') or {}).items()} or None,
                                      'credentialsStored': False},

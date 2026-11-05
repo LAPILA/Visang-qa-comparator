@@ -370,7 +370,7 @@ class ObservationTests(unittest.TestCase):
         page = MagicMock(url='https://a.test/')
         page.on.side_effect = lambda event, callback: callbacks.__setitem__(event, callback)
         record = {'url': 'https://a.test/', 'runId': 'run', 'environment': 'a', 'pageId': 'page', 'issues': []}
-        _attach_observers(page, record, {'blocked_urls': set()})
+        _attach_observers(page, {'blocked_urls': set(), 'record': record})
         _append_issue(record, 'POLICY_BLOCKED', 'SKIP', 'HOST_NOT_APPROVED', 'https://cdn.test/jquery.js',
                       resourceType='script', method='GET', source='POLICY')
         callbacks['pageerror'](RuntimeError('$ is not defined'))
@@ -410,7 +410,7 @@ class ObservationTests(unittest.TestCase):
         page = MagicMock()
         page.on.side_effect = lambda event, callback: callbacks.__setitem__(event, callback)
         record = {'url': 'https://a.test/', 'runId': 'run', 'environment': 'a', 'pageId': 'page', 'issues': []}
-        _attach_observers(page, record, {'blocked_urls': set()})
+        _attach_observers(page, {'blocked_urls': set(), 'record': record})
         request = RequestGuardTests.Request('https://external.test/widget.js')
         request.resource_type = 'script'
         response = MagicMock(status=403, url=request.url, request=request)

@@ -176,6 +176,10 @@ function applyProfile({ restoreRememberedIds = true } = {}) {
   for (const name of ['aliases', 'regions', 'safeActions', 'scenarioIds', 'conditions', 'privateMaskSelectors']) $(`#${name}`).value = JSON.stringify(defaults[name] || profile[name] || [], null, 2);
   for (const name of ['allowedPaths', 'allowedHosts', 'resourceHosts']) $(`#${name}`).value = (defaults[name] || profile[name] || []).join('\n');
   $('#manualLogin').checked = defaults.manualLogin ?? false;
+  $('#observationMode').value = defaults.observationMode || 'strict'; $('#xhrPolicy').value = defaults.xhrPolicy || 'allow_allowed_hosts'; $('#smokeActions').checked = Boolean(defaults.smokeActions); $('#safetyLevel').value = defaults.safetyLevel || 'strict'; updateSafetyWarning();
+  $('#dismissSelectors').value = (defaults.dismissSelectors || []).join('\n');
+  const entryDefault = defaults.entry && typeof defaults.entry === 'object' ? defaults.entry : null;
+  $('#entrySelector').value = entryDefault?.selector || ''; $('#entryText').value = entryDefault?.text || ''; $('#entryUrlPattern').value = entryDefault?.urlPattern || ''; $('#entrySides').value = entryDefault?.sides || 'both';
   if (restoreRememberedIds) loadRememberedIds();
   updateTestType();
   updateStartButton();
@@ -209,6 +213,16 @@ function loadRunSettings({ visual = false } = {}) {
     const value = read(snake, id);
     if (Array.isArray(value)) $(`#${id}`).value = value.join('\n');
   }
+  const xhrPolicy = read('xhr_policy', 'xhrPolicy'); if (xhrPolicy) $('#xhrPolicy').value = xhrPolicy;
+  const observationMode = read('observation_mode', 'observationMode'); if (observationMode) $('#observationMode').value = observationMode;
+  const smoke = read('smoke_actions', 'smokeActions'); if (typeof smoke === 'boolean') $('#smokeActions').checked = smoke;
+  const safety = read('safety_level', 'safetyLevel'); if (safety) $('#safetyLevel').value = safety; updateSafetyWarning();
+  const dismiss = read('dismiss_selectors', 'dismissSelectors'); if (Array.isArray(dismiss)) $('#dismissSelectors').value = dismiss.join('\n');
+  const entry = read('entry', 'entry');
+  $('#entrySelector').value = entry && typeof entry.selector === 'string' ? entry.selector : '';
+  $('#entryText').value = entry && typeof entry.text === 'string' ? entry.text : '';
+  $('#entryUrlPattern').value = entry && typeof entry.urlPattern === 'string' ? entry.urlPattern : '';
+  $('#entrySides').value = entry && ['a', 'b', 'both'].includes(entry.sides) ? entry.sides : 'both';
   const login = read('login', 'login');
   $('#loginEnabled').checked = Boolean(login && typeof login === 'object');
   for (const [id, key] of Object.entries({ loginUrl: 'url', loginUsernameSelector: 'usernameSelector', loginPasswordSelector: 'passwordSelector', loginSubmitSelector: 'submitSelector', loginSuccessSelector: 'successSelector', loginFailureSelector: 'failureSelector', loginAccountKey: 'accountKey' })) $(`#${id}`).value = login && typeof login === 'object' && typeof login[key] === 'string' ? login[key] : '';
@@ -262,11 +276,18 @@ function buildPayload() {
   if (payload.testType === 'regression') { payload.previousRunId = $('#previousRunId').value; if (!payload.previousRunId) throw new Error('회귀 비교의 기준이 될 과거 실행을 선택해 주세요.'); }
   if (payload.testType === 'conditional') { payload.conditions = readArray('conditions'); if (!payload.conditions.length) throw new Error('조건 기반 검사에 사용할 conditions를 한 개 이상 입력해 주세요.'); }
   for (const name of ['maxPages', 'maxDepth', 'maxActions', 'timeoutSeconds', 'visualThreshold']) payload[name] = Number($(`#${name}`).value);
+  payload.xhrPolicy = $('#xhrPolicy').value; payload.observationMode = $('#observationMode').value; payload.smokeActions = $('#smokeActions').checked; payload.safetyLevel = $('#safetyLevel').value;
+  payload.dismissSelectors = $('#dismissSelectors').value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+  if ($('#entrySelector').value.trim()) {
+    payload.entry = { selector: $('#entrySelector').value.trim(), sides: $('#entrySides').value };
+    for (const [id, key] of Object.entries({ entryText: 'text', entryUrlPattern: 'urlPattern' })) { const value = $(`#${id}`).value.trim(); if (value) payload.entry[key] = value; }
+  }
   if ($('#loginEnabled').checked) {
     if (payload.manualLogin) throw new Error('수동 로그인과 테스트 계정 자동 로그인은 동시에 사용할 수 없습니다.');
     const login = {};
     for (const [id, key] of Object.entries({ loginUrl: 'url', loginUsernameSelector: 'usernameSelector', loginPasswordSelector: 'passwordSelector', loginSubmitSelector: 'submitSelector', loginSuccessSelector: 'successSelector', loginFailureSelector: 'failureSelector', loginAccountKey: 'accountKey' })) { const value = $(`#${id}`).value.trim(); if (value) login[key] = value; }
-    for (const key of ['usernameSelector', 'passwordSelector', 'submitSelector']) if (!login[key]) throw new Error('테스트 계정 로그인에는 아이디·비밀번호·제출 선택자가 모두 필요합니다.');
+    const explicit = ['usernameSelector', 'passwordSelector', 'submitSelector'].filter(key => login[key]);
+    if (explicit.length && explicit.length < 3) throw new Error('로그인 선택자는 아이디·비밀번호·버튼 셋을 모두 적거나, 모두 비워 자동 탐지를 사용하세요.');
     if (login.url && !safeUrl(login.url)) throw new Error('로그인 URL은 자격증명이 없는 http(s) URL이어야 합니다.');
     payload.login = login;
   }
@@ -293,7 +314,10 @@ function renderHistory() {
     button.append(el('div', { class: 'history-top' }, [el('span', { class: 'history-title', text: profileLabel(job.profileId || job.report?.profileId) }), el('span', { class: `job-state ${job.state || ''}`, text: JOB_LABELS[job.state] || job.state || '기록' })]));
     button.append(el('div', { class: 'history-meta', text: `${job.operatorId || job.report?.operatorId || '담당자 정보 없음'} · ${dateText(job.startedAt)}\n${TYPE_LABELS[job.testType || job.report?.testType] || '목적 기록 없음'} · ${String(job.id || '').slice(0, 8)}` }));
     button.addEventListener('click', () => loadJob(job.id).catch(error => showError(error.message)));
-    list.append(button);
+    const active = ['running', 'awaiting_auth'].includes(job.state);
+    const remove = el('button', { type: 'button', class: 'history-delete', title: active ? '진행 중인 실행은 삭제할 수 없습니다' : '이 실행 기록 삭제', 'aria-label': '실행 기록 삭제', disabled: active, text: '×' });
+    remove.addEventListener('click', event => { event.stopPropagation(); deleteRun(job); });
+    list.append(el('div', { class: 'history-entry' }, [button, remove]));
   }
 }
 
@@ -375,7 +399,12 @@ function renderSite(site, name) {
   if (!site) { box.append(el('p', { class: 'mini-meta', text: '이 환경에서 대응 페이지를 확인하지 못했습니다. 미발견은 페이지가 없다는 확정 판정이 아닙니다.' })); return box; }
   box.append(link(site.url), el('p', { class: 'mini-meta', text: `HTTP ${site.statusCode ?? '—'} · ${site.title || '제목 정보 없음'}` }));
   if (site.finalUrl && site.finalUrl !== site.url) box.append(el('p', { class: 'mini-meta' }, [el('span', { text: '최종 URL: ' }), link(site.finalUrl)]));
-  box.append(renderIssues(site.issues));
+  if (site.entryAction) box.append(el('p', { class: 'mini-meta', text: `커버 페이지 통과: ${site.entryAction.selector} 클릭 · ${site.entryAction.before} → ${site.entryAction.after}` }));
+  const issues = Array.isArray(site.issues) ? site.issues : [];
+  const noisy = issues.filter(issue => !['PASS', 'SKIP'].includes(issue.level));
+  const log = el('details', { class: 'sub-details misc-log' }, [el('summary', { text: `기타 · 관찰 로그 ${noisy.length}건 (콘솔·리소스·네트워크 — 판정과 별개)` })]);
+  log.append(renderIssues(issues));
+  box.append(log);
   return box;
 }
 function imageCard(value, title, emptyText = '이미지 없음 / 비교 불가') {
@@ -501,7 +530,8 @@ function rowFor(item, index) {
   const main = el('summary', { class: 'row-main' });
   const paired = Boolean(item.baseline && item.candidate);
   const titleSummary = paired ? `A: ${item.baseline.title || '제목 미기록'} / B: ${item.candidate.title || '제목 미기록'}` : item.baseline ? `A: ${item.baseline.title || '제목 미기록'}` : item.candidate ? `B: ${item.candidate.title || '제목 미기록'}` : '제목 정보 없음';
-  const primary = el('div', {}, [el('div', { class: 'pathname', text: item.key === '__ROOT__' ? '홈 페이지' : item.key || item.page_class || '페이지' }), el('div', { class: 'desc', text: titleSummary })]);
+  const unvisited = Array.isArray(item.unvisitedPages) ? item.unvisitedPages : null;
+  const primary = el('div', {}, [el('div', { class: 'pathname', text: unvisited ? `미방문 페이지 ${item.unvisitedCount ?? unvisited.length}개 · ${(item.flags || [])[0] || ''}` : item.key === '__ROOT__' ? '홈 페이지' : item.key || item.page_class || '페이지' }), el('div', { class: 'desc', text: unvisited ? `${item.baseline ? '환경 A' : '환경 B'} · 한도·정책으로 방문하지 않은 페이지 묶음 (목록은 상세와 페이지 인벤토리)` : titleSummary })]);
   if (item.region_id) primary.append(el('div', { class: 'region-label', text: item.region_id }));
   primary.append(triageBadge(item));
   primary.append(el('div', { class: 'observation-summary', text: meta.findings[0]?.summary || (item.checks || []).find(check => check.status !== 'PASS')?.reason_code || '구조화 관찰 요약 미등록' }));
@@ -514,6 +544,7 @@ function rowFor(item, index) {
   const difference = numeric(item.visual?.differencePercent);
   main.append(primary, badge(item.status), tags, el('span', { class: 'diff-value', text: differenceText(item.visual?.differencePercent) }), el('span', { class: 'review-tag' }, [el('span', {}, [el('span', { text: REVIEW_LABELS[item.review?.status] || '미검수' }), el('span', { class: 'issue-state', text: reviewIssue(item) ? '이슈 연결됨' : '이슈 미등록' })]), el('span', { class: 'expand-mark', text: '⌄', 'aria-hidden': 'true' })]));
   const details = el('div', { class: 'details' });
+  if (unvisited) { const list = el('details', { class: 'sub-details' }, [el('summary', { text: `미방문 페이지 목록 ${unvisited.length}개 보기` })]); list.append(el('pre', { class: 'inventory-evidence', text: unvisited.join('\n') })); details.append(el('p', { class: 'mini-meta', text: '페이지·깊이·시간 한도나 정책 때문에 방문하지 않은 페이지입니다. 한도를 늘리거나 허용 경로를 추가하면 다음 실행에서 검사합니다. 미방문은 결함이 아닙니다.' }), list); }
   if (item.triage) {
     details.append(el('div', { class: `triage-note ${item.triage.bucket}` }, [
       el('strong', { text: `${TRIAGE_LABELS[item.triage.bucket] || item.triage.bucket} · ${item.triage.label || item.triage.reason}` }),
@@ -533,7 +564,13 @@ function rowFor(item, index) {
   const images = compare ? [imageCard(item.baseline?.screenshot, '기준 A 화면'), imageCard(item.candidate?.screenshot, '비교 B 화면'), imageCard(item.visual?.url, '차이 영역', reportMode() === 'discovery' ? '탐색 모드에서는 차이 이미지를 만들지 않습니다.' : '이미지 없음 / 비교 불가')] : [imageCard((item.baseline || item.candidate)?.screenshot, type === 'regression' ? '현재 실행 화면' : '대상 A 화면')];
   details.append(el('h4', { class: 'evidence-title', text: `화면 증거${compare ? ` · ${difference == null ? differenceText(null) : `차이율 ${difference.toFixed(2)}%`}` : ''}` }), el('div', { class: `screenshot-grid${compare ? '' : ' single-target'}` }, images));
   if (item.visual?.note) details.append(el('p', { class: 'mini-meta', text: item.visual.note }));
-  details.append(el('h4', { class: 'evidence-title', text: '연결된 발견 사항 · 중복 관찰과 근거' }), renderFindings(item), el('h4', { class: 'evidence-title', text: '실행한 검증식과 기대 결과' }), renderChecks(item.checks), renderActions(item), renderReview(item));
+  const allChecks = Array.isArray(item.checks) ? item.checks : [];
+  const functional = allChecks.filter(check => !check.informational && !String(check.check_id || '').includes('.observation.'));
+  const misc = allChecks.filter(check => check.informational || String(check.check_id || '').includes('.observation.'));
+  details.append(el('h4', { class: 'evidence-title', text: `기능·구조 검증식 ${functional.length}개 · 판정을 결정하는 항목` }), renderChecks(functional));
+  const miscBox = el('details', { class: 'sub-details misc-log' }, [el('summary', { text: `기타 · 관찰 로그 ${misc.length}건 · 발견 사항 ${rowFindings(item).length}건 · 동작 목록 (판정과 별개)` })]);
+  miscBox.append(el('h4', { class: 'evidence-title', text: '관찰 로그 (콘솔·리소스·네트워크)' }), renderChecks(misc), el('h4', { class: 'evidence-title', text: '연결된 발견 사항 · 중복 관찰과 근거' }), renderFindings(item), renderActions(item));
+  details.append(miscBox, renderReview(item));
   row.append(main, details); return row;
 }
 
@@ -773,9 +810,30 @@ $('#continueBtn').addEventListener('click', async () => {
   $('#continueBtn').disabled = true;
   try { await api(`/api/scans/${encodeURIComponent(state.activeId)}/continue`, { method: 'POST', body: {} }); $('#authText').textContent = '검사 계속을 요청했습니다. 사용자가 확인한 로그인 상태로 검사를 진행합니다.'; } catch (error) { showError(error.message); $('#continueBtn').disabled = false; }
 });
+$('#clearHistory').addEventListener('click', async () => {
+  const finished = state.jobs.filter(job => !['running', 'awaiting_auth'].includes(job.state)).length;
+  if (!finished) { showSuccess('삭제할 완료된 실행 기록이 없습니다.'); return; }
+  if (!window.confirm(`완료된 실행 기록 ${finished}개와 스크린샷 증거를 모두 삭제합니다. 되돌릴 수 없습니다. 계속할까요?`)) return;
+  try { const data = await api('/api/scans/delete-finished', { method: 'POST', body: {} }); if (!state.activeId) { state.selectedId = null; state.report = null; visible($('#resultSection'), false); } await refreshHistory(); showSuccess(`실행 기록 ${data.removed}개를 삭제했습니다.`); } catch (error) { showError(error.message); }
+});
+async function deleteRun(job) {
+  if (!window.confirm(`실행 ${String(job.id).slice(0, 8)} (${job.operatorId || '담당자 미기록'}) 기록과 증거를 삭제합니다. 되돌릴 수 없습니다.`)) return;
+  try { await api(`/api/scans/${encodeURIComponent(job.id)}/delete`, { method: 'POST', body: {} }); if (state.selectedId === job.id) { state.selectedId = null; state.report = null; visible($('#resultSection'), false); } await refreshHistory(); showSuccess('실행 기록을 삭제했습니다.'); } catch (error) { showError(error.message); }
+}
 $('#refreshHistory').addEventListener('click', async () => { try { await refreshHistory(); const active = state.jobs.find(job => ['running', 'awaiting_auth'].includes(job.state)); if (active) { state.activeId = active.id; updateProgress(active); startPolling(active.id); updateStartButton(); } } catch (error) { showError(error.message); } });
 function updateLoginFields() { const enabled = $('#loginEnabled').checked; for (const node of document.querySelectorAll('#loginFields input')) node.disabled = !enabled; $('#loginFields').classList.toggle('disabled', !enabled); if (enabled) $('#manualLogin').checked = false; }
+function updateSafetyWarning() { visible($('#safetyWarning'), $('#safetyLevel').value === 'test_account'); }
+$('#safetyLevel').addEventListener('change', updateSafetyWarning);
 $('#loginEnabled').addEventListener('change', updateLoginFields);
+$('#fullCheckPreset').addEventListener('click', () => {
+  $('#crawlScope').value = 'same_origin_readonly'; $('#mode').value = 'combined';
+  $('#maxPages').value = 30; $('#maxDepth').value = 3; $('#maxActions').value = 200; $('#timeoutSeconds').value = 900; $('#visualThreshold').value = 8;
+  $('#observationMode').value = 'lenient'; $('#smokeActions').checked = true; $('#xhrPolicy').value = 'allow_allowed_hosts'; $('#safetyLevel').value = 'test_account'; updateSafetyWarning();
+  $('#loginEnabled').checked = true; $('#manualLogin').checked = false; updateLoginFields(); $('#loginDetails').open = true;
+  if (!$('#entrySelector').value.trim()) { $('#entrySelector').value = 'button, a, [role=button]'; $('#entryText').value = /mobile/.test($('#profileId').value) ? '모바일웹으로 계속하기|모바일 웹으로 이동하기' : 'PC버전으로 계속하기|PC 버전으로 계속하기'; $('#entryUrlPattern').value = '*coverPage*'; $('#entrySides').value = 'both'; }
+  updateCrawlScopeHint(); clearError();
+  showSuccess('전체 기능 자동 체크 프리셋을 적용했습니다: 로그인 후 환경 내부 링크 전체 탐색(최대 30페이지·깊이 3), 테스트 계정 수준으로 버튼·폼 제출까지 스모크 실행, 사소한 시각 차이(8% 미만) PASS, 콘솔·리소스 오류는 "기타"로 분리. 회원탈퇴·비밀번호 변경·로그아웃·결제·회원가입만 차단됩니다. 검사 시작을 눌러 주세요.');
+});
 $('#manualLogin').addEventListener('change', () => { if ($('#manualLogin').checked) { $('#loginEnabled').checked = false; updateLoginFields(); } });
 updateLoginFields();
 $('#profileId').addEventListener('change', applyProfile);
@@ -805,7 +863,8 @@ async function init() {
     for (const profile of state.profiles) select.append(el('option', { value: profile.id, text: profile.label || profile.id, disabled: Boolean(profile.disabled) }));
     const first = state.profiles.find(profile => !profile.disabled && /demo/i.test(profile.id)) || state.profiles.find(profile => !profile.disabled);
     if (first) { select.value = first.id; applyProfile(); }
-    $('#connectionStatus').textContent = '로컬 서버 연결됨 · 실행 기록 저장';
+    $('#connectionStatus').textContent = `로컬 서버 연결됨 · 실행 기록 저장 · 엔진 v${bootstrap.version || "?"}`;
+    if (bootstrap.version) $("#versionPill").textContent = `v${bootstrap.version} · LOCAL`;
     updateStartButton();
     await refreshHistory();
     const active = state.jobs.find(job => ['running', 'awaiting_auth'].includes(job.state));

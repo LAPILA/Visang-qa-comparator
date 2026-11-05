@@ -517,3 +517,28 @@ code { font-family: var(--mono); font-size: .92em; background: var(--surface-2);
   :root { --issue: #ff6b84; --issue-bg: #3a1d26; --human: #f0b357; --human-bg: #3a2c15; --retest: #a393f5; --retest-bg: #2a2345; }
   .triage-tile.active { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent) inset; }
 }
+
+/* 13. 실행 이력 삭제 · 캡처 옵션 ------------------------------------- */
+.history-actions { display: flex; gap: 6px; }
+.icon-button.danger:hover { color: var(--fail); border-color: #e7a9b5; background: var(--fail-bg); }
+.history-entry { position: relative; }
+.history-entry .history-item { padding-right: 34px; }
+.history-delete { position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--muted); font-size: 15px; line-height: 1; display: grid; place-items: center; opacity: .55; }
+.history-entry:hover .history-delete, .history-delete:focus-visible { opacity: 1; }
+.history-delete:hover:enabled { color: var(--fail); background: var(--fail-bg); border-color: #e7a9b5; }
+.capture-fields { margin-top: 16px; }
+.capture-fields textarea { font-family: var(--mono); }
+
+/* 14. 프리셋 · 기타 로그 ---------------------------------------------- */
+.heading-actions { display: flex; align-items: center; gap: 10px; }
+.preset-button { border-color: #c9d7f8; color: var(--accent); background: var(--accent-soft); font-size: var(--fs-sm); }
+.preset-button:hover:enabled { background: #dbe5fd; }
+.smoke-line { margin-top: 12px; align-items: flex-start; }
+.smoke-line input { margin-top: 2px; }
+.misc-log > summary { color: var(--muted); font-weight: 650; }
+.misc-log[open] > summary { color: var(--text-2); }
+.misc-log .evidence-title:first-of-type { margin-top: 10px; }
+@media (max-width: 550px) { .heading-actions { flex-direction: column; align-items: flex-end; gap: 6px; } }
+
+.safety-field { margin-top: 14px; }
+.safety-warning { color: #8a4150; background: var(--fail-bg); border: 1px solid #f0c3cc; border-radius: var(--r-sm); padding: 10px 12px; }

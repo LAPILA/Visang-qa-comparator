@@ -111,6 +111,16 @@ _LOGIN_FORM = ("<section id=\"login-section\"><h2>Test account sign-in</h2>"
                "<p class=\"subtle\">Synthetic fixture: any account whose password is <code>demo-pass</code> signs in.</p></section>")
 
 
+def _cover_page(side):
+    """Landing gate like a legacy mobile SPA's /#/coverPage: a click reveals the real home."""
+    return (f'<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>Cover | Synthetic QA demo</title>'
+            f'<style>{_CSS}</style></head><body data-qa-demo="{DEMO_MARKER}" data-qa-environment="{side}" data-qa-feature="cover">'
+            f'<main id="main-content"><h1>앱 설치 안내</h1><section id="cover-gate"><p>앱에서 더 편하게 이용하세요.</p>'
+            f'<button id="enter-mobile-web" type="button">모바일 웹으로 이동하기</button></section></main>'
+            f'<script>document.getElementById("enter-mobile-web").addEventListener("click", () => {{ location.href = "/demo/{side}/"; }});</script>'
+            f'</body></html>')
+
+
 def _login_page(side, error=False):
     body = _LOGIN_FORM.format(action=f"/demo/{side}/login",
                               error='<p id="login-error" role="alert">Invalid account or password.</p>' if error else '')
@@ -169,7 +179,7 @@ def _page(side, feature, query, signed_in=None):
     return f'''<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{title} | Synthetic QA demo</title><style>{_CSS}</style></head>
 <body data-qa-demo="{DEMO_MARKER}" data-qa-environment="{side}" data-qa-feature="{feature or 'home'}">
 <header><p class="subtle">Local synthetic QA fixture</p><nav id="site-nav" aria-label="Main">{links}</nav>{required}{session}</header>
-<main id="main-content"><h1>{title}</h1>{body}</main><footer class="subtle">Synthetic fixture. No external requests or production data.</footer>
+<main id="main-content"><h1>{title}</h1>{body}</main><footer class="subtle">Synthetic fixture. No external requests or production data. <a id="hidden-login-link" href="/demo/{side}/login" hidden>Sign in</a></footer>
 <script>
 const toggle = document.getElementById('safe-toggle');
 if(toggle) toggle.addEventListener('click', () => {{ const panel = document.getElementById('safe-panel'); panel.hidden = !panel.hidden; toggle.setAttribute('aria-expanded', String(!panel.hidden)); }});
@@ -215,6 +225,12 @@ def handle_demo(handler, path):
             with _COUNTER_LOCK:
                 _MUTATIONS[side][action] += 1
             _respond(handler, 200, json.dumps({"synthetic_trap_triggered": True, "action": action}))
+        else:
+            _respond(handler, 405, '{"error":"method_not_allowed"}')
+        return True
+    if len(parts) == 3 and parts[2] == "cover":
+        if method in {"GET", "HEAD"}:
+            _respond(handler, 200, _cover_page(side), "text/html; charset=utf-8")
         else:
             _respond(handler, 405, '{"error":"method_not_allowed"}')
         return True

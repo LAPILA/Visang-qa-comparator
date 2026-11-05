@@ -66,7 +66,7 @@ class ConfigValidationTests(unittest.TestCase):
         for value in (math.nan, math.inf, -math.inf, "NaN", "1e309", True, 1.5, 0, 31, None):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 parse_options(self.custom(maxPages=value), self.origin)
-        for key, value in (("maxActions", 51), ("timeoutSeconds", 14),
+        for key, value in (("maxActions", 301), ("timeoutSeconds", 14),
                            ("actionInterval", 0), ("visualThreshold", float("nan"))):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 parse_options(self.custom(**{key: value}), self.origin)
@@ -198,13 +198,17 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertFalse(resource_allowed('https://cdn.invalid/a.js', 'script', 'GET', False, ['cdn.invalid:8443']))
 
     def test_profile_resource_defaults_are_narrow_and_can_be_disabled(self):
+        from qa.config import _SHARED_ASSET_HOSTS
         available = {item['id']: item for item in profiles(self.origin)}
         mobile = available['elementary-mobile']['defaults']['resourceHosts']
-        self.assertEqual(set(mobile), {'code.jquery.com', 'developers.kakao.com', 'dapi.kakao.com', 'www.vivasam.com'})
-        for profile in ('custom', 'synthetic-demo', 'secondary-pc'):
+        # Observed static asset/SDK hosts only (2026-11-04 real runs); trackers stay out.
+        self.assertEqual(set(mobile), set(_SHARED_ASSET_HOSTS))
+        for tracker in ('www.googletagmanager.com', 'cdn-aitg.widerplanet.com', 'dj.vsaidt.com', 'cdn.channel.io'):
+            self.assertNotIn(tracker, _SHARED_ASSET_HOSTS)
+        for profile in ('custom', 'synthetic-demo'):
             self.assertEqual(available[profile]['defaults']['resourceHosts'], [])
-        self.assertEqual(available['elementary-pc']['defaults']['resourceHosts'], ['code.jquery.com'])
-        self.assertEqual(available['secondary-mobile']['defaults']['resourceHosts'], ['code.jquery.com'])
+        for profile in ('elementary-pc', 'secondary-pc', 'secondary-mobile'):
+            self.assertEqual(set(available[profile]['defaults']['resourceHosts']), set(_SHARED_ASSET_HOSTS))
         options = parse_options({'profileId': 'elementary-mobile'}, self.origin)
         self.assertNotIn('code.jquery.com', options['allowed_hosts'])
         self.assertEqual(parse_options({'profileId': 'elementary-mobile', 'resourceHosts': []}, self.origin)['resource_hosts'], [])

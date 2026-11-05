@@ -31,7 +31,7 @@ _CONTRACT_CATEGORIES = frozenset({'FUNCTIONAL', 'STRUCTURE', 'NAVIGATION', 'API'
 _OBSERVATION_CATEGORIES = frozenset({'RESOURCE', 'HTTP', 'JAVASCRIPT', 'NETWORK', 'VISUAL', 'TEST_INFRA'})
 _AUTH_REASONS = frozenset({'LOGIN_REQUIRED', 'ACCESS_DENIED', 'SESSION_EXPIRED', 'ROLE_UNAVAILABLE',
                            'MANUAL_AUTH_REQUIRED', 'LOGIN_FAILED', 'LOGIN_CREDENTIALS_MISSING',
-                           'LOGIN_HOST_NOT_APPROVED', 'AUTH_TIME_LIMIT_REACHED'})
+                           'LOGIN_HOST_NOT_APPROVED', 'AUTH_TIME_LIMIT_REACHED', 'LOGIN_FORM_NOT_FOUND'})
 _DATA_REASONS = frozenset({'INSUFFICIENT_DATA', 'PRECONDITION_FAILED', 'REGION_PREREQUISITE_FAILED'})
 _PAGE_LEVEL_REASONS = frozenset({'DOCUMENT_HTTP_ERROR', 'NAVIGATION_ERROR'})
 
@@ -75,7 +75,7 @@ def _document_reachable(checks):
 def triage_row(row):
     """Return {'bucket', 'reason', 'label', 'basis', 'suggestedReview'} for one result row."""
     status = row.get('status')
-    checks = [c for c in row.get('checks', []) if isinstance(c, dict)]
+    checks = [c for c in row.get('checks', []) if isinstance(c, dict) and not c.get('informational')]
     basis = []
 
     def result(bucket, reason):

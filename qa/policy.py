@@ -11,6 +11,23 @@ _DANGEROUS = re.compile(
     r'(?i)(logout|log-out|signout|sign-out|delete|remove|withdraw|unsubscribe|'
     r'purchase|checkout|payment|subscribe|register|save|submit|send|upload|'
     r'삭제|탈퇴|결제|구매|신청|등록|저장|전송|발송|로그아웃|수정|업로드)')
+# Test-account level: everything a shared QA account may do, except what would break the
+# account for everyone (withdrawal, password change, logout) or spend money.
+_HARD_DENY = re.compile(
+    r'(?i)(회원\s*탈퇴|탈퇴|withdraw|deactivate-?account|close-?account|'
+    r'결제|구매|주문\s*하기|payment|purchase|checkout|billing|'
+    r'비밀번호|password|passwd|'
+    r'로그아웃|log-?out|sign-?out|'
+    r'회원\s*가입|sign-?up|register|join)')
+SAFETY_LEVELS = ('strict', 'test_account')
+
+
+def _level(options_or_level):
+    if isinstance(options_or_level, dict):
+        return options_or_level.get('safety_level', 'strict')
+    return options_or_level or 'strict'
+
+
 _DOWNLOAD = re.compile(r'(?i)(download|다운로드|\.(?:pdf|zip|xlsx?|docx?|pptx?|hwp|exe|msi)(?:$|[?#]))')
 # Expanded discovery never treats account management or data/file endpoints as
 # general page navigation. Explicit-path mode retains its existing policy.
@@ -82,6 +99,8 @@ def check(check_id, status, reason_code, expected=None, actual=None, *,
 
 
 def aggregate_status(checks):
+    # Informational observations are evidence, never a verdict (lenient observation mode).
+    checks = [c for c in checks if not c.get('informational')] or checks
     statuses = [c.get('status', 'ERROR') for c in checks]
     for status in ('FAIL', 'ERROR'):
         if status in statuses:
@@ -102,14 +121,21 @@ def unexecuted_status(reason):
     if (reason == 'CANCELLED' or 'LIMIT' in reason or 'PREREQUISITE' in reason
             or reason in {'MANUAL_AUTH_REQUIRED', 'LOGIN_REQUIRED', 'SESSION_EXPIRED',
                           'ROLE_UNAVAILABLE', 'INSUFFICIENT_DATA', 'NO_COMPARABLE_PIXELS',
-                          'LOGIN_FAILED', 'LOGIN_CREDENTIALS_MISSING', 'LOGIN_HOST_NOT_APPROVED',
+                          'LOGIN_FAILED', 'LOGIN_CREDENTIALS_MISSING', 'LOGIN_HOST_NOT_APPROVED', 'LOGIN_FORM_NOT_FOUND',
                           'MATCH_SIDE_UNAVAILABLE', 'PAGE_NOT_READY', 'PREVIOUS_STATE_RESET_FAILED'}):
         return 'BLOCKED'
     return 'SKIP'
 
 
-def dangerous_action(action):
+def dangerous_action(action, level='strict'):
     combined = unquote(' '.join(str(action.get(k, '')) for k in ('label', 'name', 'href', 'url', 'formAction')))
+    if _level(level) == 'test_account':
+        # Writes are allowed with a test account; only account-breaking / paid actions stay denied.
+        if _HARD_DENY.search(combined):
+            return 'ACCOUNT_BREAKING_ACTION'
+        if _DOWNLOAD.search(combined) or action.get('download'):
+            return 'DOWNLOAD_NOT_APPROVED'
+        return None
     if _DANGEROUS.search(combined):
         return 'MUTATING_ACTION'
     if _DOWNLOAD.search(combined) or action.get('download'):
@@ -218,15 +244,16 @@ def _readonly_query_reason(query, depth=0):
     return None
 
 
-def readonly_navigation_reason(action):
+def readonly_navigation_reason(action, level='strict'):
     """Return a conservative exclusion reason, not proof that a GET is safe."""
-    denied = dangerous_action(action)
+    level = _level(level)
+    denied = dangerous_action(action, level)
     if denied:
         return denied
     url = action.get('href') or action.get('url') or ''
     if not _origin_identity(url):
         return 'INVALID_NAVIGATION_URL'
-    denied = dangerous_action({**action, 'href': unquote(unquote(url))})
+    denied = dangerous_action({**action, 'href': unquote(unquote(url))}, level)
     if denied:
         return denied
     if action.get('formAction') or action.get('tag', 'a').lower() not in ('a', 'area'):
@@ -238,14 +265,21 @@ def readonly_navigation_reason(action):
     path = unquote(unquote((parts.path or '/') + '/' + parts.fragment.split('?', 1)[0]))
     readable_path = re.sub(r'([a-z])([A-Z])', r'\1-\2', path)
     label = ' '.join(str(action.get(key) or '') for key in ('label', 'name'))
-    if _PRIVATE_ROUTE.search(readable_path + ' ' + label):
-        return 'ACCOUNT_OR_PRIVATE_ROUTE_NOT_APPROVED'
-    if _WRITE_ROUTE.search(readable_path + ' ' + label):
-        return 'MUTATING_ROUTE_NOT_APPROVED'
+    if level == 'test_account':
+        # Mypage/settings/write routes are in scope for a test account; API/file links still are not.
+        if _HARD_DENY.search(readable_path + ' ' + label):
+            return 'ACCOUNT_BREAKING_ROUTE'
+    else:
+        if _PRIVATE_ROUTE.search(readable_path + ' ' + label):
+            return 'ACCOUNT_OR_PRIVATE_ROUTE_NOT_APPROVED'
+        if _WRITE_ROUTE.search(readable_path + ' ' + label):
+            return 'MUTATING_ROUTE_NOT_APPROVED'
     if _NON_PAGE_FILE.search(unquote(unquote(url))):
         return 'NON_PAGE_RESOURCE_NOT_APPROVED'
     if _API_ROUTE.search(readable_path):
         return 'API_NAVIGATION_NOT_APPROVED'
+    if level == 'test_account':
+        return None
     queries = [parts.query, parts.fragment.partition('?')[2]]
     for query in queries:
         denied = _readonly_query_reason(query)
@@ -272,8 +306,10 @@ def route_allowed(url, options, seed_urls=(), *, origin_url=None):
         if options.get('crawl_scope', 'approved_paths') == 'same_origin_readonly':
             origin = _selected_origin(seed_urls, origin_url or options.get('_environment_seed'))
             return bool(origin and _origin_identity(url) == origin and
-                        not readonly_navigation_reason({'url': url}))
+                        not readonly_navigation_reason({'url': url}, _level(options)))
         identity = route_identity(url)
+        if identity in options.get('_mirror_paths', ()):
+            return True
         paths = {route_identity(seed) for seed in seed_urls}
         for alias in options.get('route_aliases', []):
             paths.update(route_identity(alias[side]) for side in ('baseline', 'candidate') if alias.get(side))
@@ -286,7 +322,7 @@ def route_allowed(url, options, seed_urls=(), *, origin_url=None):
 
 def classify_candidate(action, options, seed_urls=(), *, origin_url=None):
     """Discovery is broad; execution requires an independent policy decision."""
-    denied = dangerous_action(action)
+    denied = dangerous_action(action, _level(options))
     if denied:
         return False, denied
     if action.get('disabled') or not action.get('visible', True):
@@ -297,7 +333,7 @@ def classify_candidate(action, options, seed_urls=(), *, origin_url=None):
             return False, 'HOST_NOT_APPROVED'
         selected_origin_url = origin_url or options.get('_environment_seed') or action.get('pageUrl')
         if options.get('crawl_scope', 'approved_paths') == 'same_origin_readonly':
-            denied = readonly_navigation_reason(action)
+            denied = readonly_navigation_reason(action, _level(options))
             if denied:
                 return False, denied
             origin = _selected_origin(seed_urls, selected_origin_url)

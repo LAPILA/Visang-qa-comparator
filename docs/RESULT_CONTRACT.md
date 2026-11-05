@@ -7,6 +7,15 @@
 - `results[].triage = {bucket, reason, label, basis: [reason_code...], suggestedReview}` · `bucket ∈ ISSUE | HUMAN_CHECK | RETEST | OK | NOT_RUN`
 - `totals.triage = {ISSUE, HUMAN_CHECK, RETEST, OK, NOT_RUN}`
 - 읽을 때마다 `qa/triage.py`로 재계산하므로 저장된 값과 다를 수 있는 유일한 필드다. 자동 `status`·`review`는 바꾸지 않는다. 결정표는 [TRIAGE_POLICY](TRIAGE_POLICY.md).
+- `manifest.entry = {selector, text, urlPattern, sides} | null`, 페이지 레코드 `entryAction = {selector, before, after}` (적용된 경우만), 검증식 `a.entry`/`b.entry`: `ENTRY_ACTION_APPLIED`(PASS) · `ENTRY_ACTION_NOT_PRESENT`/`ENTRY_ACTION_NOT_APPLICABLE`(SKIP, 비필수) · `ENTRY_ACTION_NO_NAVIGATION`/`ENTRY_ACTION_FAILED`(REVIEW).
+- 환경당 탭 하나가 유지되므로 SPA 해시 라우트 이동은 문서 응답이 없다. 이 경우 `a.document`는 이미 로드된 문서의 상태코드로 PASS(`actual: "200 · SPA same-document route"`)를 기록한다.
+- 페이지 레코드 `mirroredFromBaseline: true` — B가 A의 방문 라우트를 그대로 방문한 페이지(A 메뉴 경로를 상속). 미방문 페이지는 환경·사유별 요약 행 하나(`key: __unvisited__/<side>/<reason>`, `unvisitedPages[]`, `unvisitedCount`)로 묶이고 전체 목록은 `inventory`에 있다. 이전 페이지의 진행 중 요청이 다음 이동으로 취소된 경우는 더 이상 `REQUEST_ABORTED`로 기록하지 않는다.
+- `manifest.safetyLevel`(strict|test_account). test_account에서 차단 사유 `ACCOUNT_BREAKING_ACTION`/`ACCOUNT_BREAKING_ROUTE`; 스모크 검증식 `actual.submitted`·`actual.filledFields`.
+- `manifest.observationMode`(strict|lenient), 검증식 `informational: true`(완화 모드의 콘솔·리소스·네트워크 관찰 — `aggregate_status`와 triage가 무시), `manifest.smokeActions`, 검증식 `*.smoke.<actionId>`: `ACTION_SMOKE_OK`(PASS) / `ACTION_SMOKE_JS_ERROR`·`ACTION_SMOKE_LEFT_SCOPE`·`ACTION_SMOKE_UNRESPONSIVE`(FAIL) / `ACTION_SMOKE_ERROR`(ERROR). 로그인 `LOGIN_FORM_NOT_FOUND`(BLOCKED), `manifest.login.form.auto`.
+- `manifest.xhrPolicy`, `manifest.dismissSelectors`, 페이지 레코드 `dismissed: [selector...]`, `readiness.networkIdle`(최대 4초 대기 결과), 검증식 `*.dismiss`(`OVERLAYS_DISMISSED` PASS 비필수 / `DISMISS_SELECTOR_FAILED` REVIEW).
+- 삭제 API: `POST /api/scans/{id}/delete`, `POST /api/scans/delete-finished` → `{removed}`. 진행 중 실행은 400.
+- `manifest.observationMode` (`strict`|`lenient`): lenient이면 콘솔·JS·리소스·네트워크 관찰 검증식에 `informational: true`가 붙고 `aggregate_status`·triage에서 제외된다(증거는 유지). `manifest.smokeActions`: 발견한 버튼 스모크 클릭 검증식 `*.smoke.*`/`*.click.*` → `ACTION_SMOKE_OK`(PASS) · `ACTION_SMOKE_JS_ERROR`/`ACTION_SMOKE_LEFT_SCOPE`/`ACTION_SMOKE_UNRESPONSIVE`(FAIL) · `ACTION_SMOKE_ERROR`(ERROR).
+- `manifest.login.form.auto`: 선택자 없이 자동 탐지한 로그인. `LOGIN_FORM_NOT_FOUND`(BLOCKED).
 - `manifest.login = {method: NONE|MANUAL|TEST_ACCOUNT, form: {...선택자} | null, credentialsStored: false}` — 계정 문자열은 어떤 필드에도 들어가지 않는다.
 
 ## 1. 실행 설정

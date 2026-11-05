@@ -26,6 +26,7 @@
 - `#triageStats` 안에 `app.js`가 `.triage-tile.{ISSUE|HUMAN_CHECK|RETEST|OK|NOT_RUN}` 버튼을 만든다. 클릭하면 `#triageFilter` select 값을 바꾸고 `renderRows()`를 호출한다.
 - 행의 분류 배지는 `.triage-badge.{bucket}` (페이지 셀 안, `.status` 배지는 그대로 `.row-main`의 직접 자식 — 테스트 계약).
 - 상세의 `.triage-note.{bucket}`은 사유·근거 코드·제안 검수를 보여준다. 색 변수: `--issue`, `--human`, `--retest` (+ 다크 값).
+- 커버 페이지 통과는 Step 2의 `#entryDetails` (`#entrySelector`, `#entryText`, `#entryUrlPattern`, `#entrySides`). 선택자가 비어 있으면 payload에 `entry`를 넣지 않는다.
 - 로그인 설정은 `#loginDetails` 안 `.login-option` 두 블록(테스트 계정 / 수동). `#loginEnabled`를 켜면 `#loginFields` 입력이 활성화되고 `#manualLogin`은 자동 해제된다(상호 배타).
 
 ## 대시보드 타일
