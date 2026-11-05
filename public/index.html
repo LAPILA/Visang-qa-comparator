@@ -144,6 +144,7 @@
             </div>
             <label class="field safety-field"><span>안전 수준</span><select id="safetyLevel" name="safetyLevel"><option value="strict">읽기 전용 · 저장·삭제·등록·POST 폼 차단 (운영 기본)</option><option value="test_account">테스트 계정 · 쓰기 동작·폼 제출·마이페이지까지 실행 (회원탈퇴·비밀번호 변경·로그아웃·결제·회원가입만 차단)</option></select></label>
             <p class="helper safety-warning hidden" id="safetyWarning">⚠ 테스트 계정 수준에서는 이 계정으로 할 수 있는 쓰기 동작을 실제로 실행합니다(게시·저장·삭제·폼 제출, 빈 입력란은 "QA자동테스트"로 채움). 운영 DB에 테스트 계정 명의의 데이터가 생길 수 있으니 계정 권한이 테스트 범위를 넘지 않는지 확인하세요. 회원탈퇴·비밀번호 변경·로그아웃·결제·회원가입은 공용 계정을 망가뜨리므로 이 수준에서도 차단됩니다.</p>
+            <label class="checkbox-line smoke-line"><input id="autoDismiss" name="autoDismiss" type="checkbox" /><span><b>팝업·공지 레이어 자동 닫기</b> · 캡처 전에 보이는 고정 레이어(role=dialog, popup/modal/layer)의 닫기·오늘 하루 보지 않기 버튼을 눌러 닫고 기록. 한쪽에만 뜨는 공지로 생기는 차이를 없앱니다</span></label>
             <label class="checkbox-line smoke-line"><input id="smokeActions" name="smokeActions" type="checkbox" /><span><b>발견한 버튼 스모크 클릭</b> · href 없는 버튼(type=button·role=button)을 눌러 "같은 출처 유지 · 새 JS 오류 없음 · 응답 유지"를 검사. 저장·삭제·제출·다운로드 단어가 있는 것은 제외</span></label>
             <p class="helper">마케팅 팝업은 환경·날짜마다 달라 차이율을 크게 올립니다. 닫기 버튼 선택자를 넣으면 캡처 전에 한 번 닫고 기록합니다. 데이터 호출 정책 기본값은 페이지가 스스로 보내는 조회 API(POST 포함)를 허용해 실제 화면이 렌더링되게 합니다. URL에 delete·save·submit 같은 변경 단어가 있으면 여전히 차단합니다.</p>
           </fieldset>

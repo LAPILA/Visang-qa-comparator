@@ -176,7 +176,7 @@ function applyProfile({ restoreRememberedIds = true } = {}) {
   for (const name of ['aliases', 'regions', 'safeActions', 'scenarioIds', 'conditions', 'privateMaskSelectors']) $(`#${name}`).value = JSON.stringify(defaults[name] || profile[name] || [], null, 2);
   for (const name of ['allowedPaths', 'allowedHosts', 'resourceHosts']) $(`#${name}`).value = (defaults[name] || profile[name] || []).join('\n');
   $('#manualLogin').checked = defaults.manualLogin ?? false;
-  $('#observationMode').value = defaults.observationMode || 'strict'; $('#xhrPolicy').value = defaults.xhrPolicy || 'allow_allowed_hosts'; $('#smokeActions').checked = Boolean(defaults.smokeActions); $('#safetyLevel').value = defaults.safetyLevel || 'strict'; updateSafetyWarning();
+  $('#observationMode').value = defaults.observationMode || 'strict'; $('#xhrPolicy').value = defaults.xhrPolicy || 'allow_allowed_hosts'; $('#smokeActions').checked = Boolean(defaults.smokeActions); $('#safetyLevel').value = defaults.safetyLevel || 'strict'; updateSafetyWarning(); $('#autoDismiss').checked = Boolean(defaults.autoDismiss);
   $('#dismissSelectors').value = (defaults.dismissSelectors || []).join('\n');
   const entryDefault = defaults.entry && typeof defaults.entry === 'object' ? defaults.entry : null;
   $('#entrySelector').value = entryDefault?.selector || ''; $('#entryText').value = entryDefault?.text || ''; $('#entryUrlPattern').value = entryDefault?.urlPattern || ''; $('#entrySides').value = entryDefault?.sides || 'both';
@@ -217,6 +217,7 @@ function loadRunSettings({ visual = false } = {}) {
   const observationMode = read('observation_mode', 'observationMode'); if (observationMode) $('#observationMode').value = observationMode;
   const smoke = read('smoke_actions', 'smokeActions'); if (typeof smoke === 'boolean') $('#smokeActions').checked = smoke;
   const safety = read('safety_level', 'safetyLevel'); if (safety) $('#safetyLevel').value = safety; updateSafetyWarning();
+  const autoDismiss = read('auto_dismiss', 'autoDismiss'); if (typeof autoDismiss === 'boolean') $('#autoDismiss').checked = autoDismiss;
   const dismiss = read('dismiss_selectors', 'dismissSelectors'); if (Array.isArray(dismiss)) $('#dismissSelectors').value = dismiss.join('\n');
   const entry = read('entry', 'entry');
   $('#entrySelector').value = entry && typeof entry.selector === 'string' ? entry.selector : '';
@@ -276,7 +277,7 @@ function buildPayload() {
   if (payload.testType === 'regression') { payload.previousRunId = $('#previousRunId').value; if (!payload.previousRunId) throw new Error('회귀 비교의 기준이 될 과거 실행을 선택해 주세요.'); }
   if (payload.testType === 'conditional') { payload.conditions = readArray('conditions'); if (!payload.conditions.length) throw new Error('조건 기반 검사에 사용할 conditions를 한 개 이상 입력해 주세요.'); }
   for (const name of ['maxPages', 'maxDepth', 'maxActions', 'timeoutSeconds', 'visualThreshold']) payload[name] = Number($(`#${name}`).value);
-  payload.xhrPolicy = $('#xhrPolicy').value; payload.observationMode = $('#observationMode').value; payload.smokeActions = $('#smokeActions').checked; payload.safetyLevel = $('#safetyLevel').value;
+  payload.xhrPolicy = $('#xhrPolicy').value; payload.observationMode = $('#observationMode').value; payload.smokeActions = $('#smokeActions').checked; payload.safetyLevel = $('#safetyLevel').value; payload.autoDismiss = $('#autoDismiss').checked;
   payload.dismissSelectors = $('#dismissSelectors').value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
   if ($('#entrySelector').value.trim()) {
     payload.entry = { selector: $('#entrySelector').value.trim(), sides: $('#entrySides').value };
@@ -828,7 +829,7 @@ $('#loginEnabled').addEventListener('change', updateLoginFields);
 $('#fullCheckPreset').addEventListener('click', () => {
   $('#crawlScope').value = 'same_origin_readonly'; $('#mode').value = 'combined';
   $('#maxPages').value = 30; $('#maxDepth').value = 3; $('#maxActions').value = 200; $('#timeoutSeconds').value = 900; $('#visualThreshold').value = 8;
-  $('#observationMode').value = 'lenient'; $('#smokeActions').checked = true; $('#xhrPolicy').value = 'allow_allowed_hosts'; $('#safetyLevel').value = 'test_account'; updateSafetyWarning();
+  $('#observationMode').value = 'lenient'; $('#smokeActions').checked = true; $('#xhrPolicy').value = 'allow_allowed_hosts'; $('#safetyLevel').value = 'test_account'; updateSafetyWarning(); $('#autoDismiss').checked = true;
   $('#loginEnabled').checked = true; $('#manualLogin').checked = false; updateLoginFields(); $('#loginDetails').open = true;
   if (!$('#entrySelector').value.trim()) { $('#entrySelector').value = 'button, a, [role=button]'; $('#entryText').value = /mobile/.test($('#profileId').value) ? '모바일웹으로 계속하기|모바일 웹으로 이동하기' : 'PC버전으로 계속하기|PC 버전으로 계속하기'; $('#entryUrlPattern').value = '*coverPage*'; $('#entrySides').value = 'both'; }
   updateCrawlScopeHint(); clearError();

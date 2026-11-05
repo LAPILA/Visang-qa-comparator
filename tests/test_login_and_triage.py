@@ -386,3 +386,57 @@ class RouteTranslationTests(unittest.TestCase):
                          'https://dev2-mv.test/myInfo?y=2')
         self.assertEqual(_translate_route('https://e.test/main', 'https://e.test/main', 'https://stg-e.test/'), 'https://stg-e.test/main')
         self.assertEqual(_translate_route('https://dev2-mv.test/', 'https://dev2-mv.test/', 'https://mv-dev.test/#/'), 'https://mv-dev.test/#/')
+
+
+class VisualComparabilityTests(unittest.TestCase):
+    def run_custom(self, baseline, extra):
+        temporary_root = Path(__file__).resolve().parents[1] / 'output' / 'tmp'
+        temporary_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=temporary_root) as directory:
+            runs = Path(directory) / 'runs'
+            server = Server(('127.0.0.1', 0), runs_dir=runs)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            try:
+                options = parse_options({'profileId': 'custom', 'operatorId': 'visual', 'mode': 'visual', 'maxPages': 1, 'maxDepth': 0,
+                                         'maxActions': 0, 'timeoutSeconds': 60, 'baselineUrl': server.base_origin + baseline, **extra}, server.base_origin)
+                return run_scan(options, str(uuid.uuid4()), runs, lambda message: None, lambda: False)
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_auto_dismiss_closes_a_marketing_popup_before_capture(self):
+        report = self.run_custom('/demo/a/?popup=1', {'testType': 'single', 'autoDismiss': True})
+        start = next(row for row in report['results'] if row['region_id'] == 'page')
+        self.assertTrue(any('auto:' in item for item in start['baseline'].get('dismissed', [])), start['baseline'].get('dismissed'))
+        self.assertTrue(any(c['reason_code'] == 'OVERLAYS_DISMISSED' for c in start['checks']))
+
+    def test_popup_on_one_side_only_passes_threshold_once_dismissed(self):
+        port_free = {'candidateUrl': None}
+        temporary_root = Path(__file__).resolve().parents[1] / 'output' / 'tmp'
+        with tempfile.TemporaryDirectory(dir=temporary_root) as directory:
+            runs = Path(directory) / 'runs'
+            server = Server(('127.0.0.1', 0), runs_dir=runs)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            try:
+                port = server.server_address[1]
+                base = {'profileId': 'custom', 'operatorId': 'visual', 'mode': 'visual', 'maxPages': 1, 'maxDepth': 0, 'maxActions': 0,
+                        'timeoutSeconds': 60, 'allowedHosts': ['127.0.0.1', 'localhost'], 'visualThreshold': 0.5,
+                        'baselineUrl': f'http://127.0.0.1:{port}/demo/a/?popup=1', 'candidateUrl': f'http://localhost:{port}/demo/a/'}
+                with_popup = run_scan(parse_options({**base, 'autoDismiss': False}, server.base_origin), str(uuid.uuid4()), runs, lambda m: None, lambda: False)
+                dismissed = run_scan(parse_options({**base, 'autoDismiss': True}, server.base_origin), str(uuid.uuid4()), runs, lambda m: None, lambda: False)
+            finally:
+                server.shutdown()
+                server.server_close()
+        row_popup = next(row for row in with_popup['results'] if row['region_id'] == 'page')
+        row_clean = next(row for row in dismissed['results'] if row['region_id'] == 'page')
+        self.assertTrue(row_popup['baseline']['captureReady'] and row_popup['candidate']['captureReady'])
+        self.assertEqual(row_popup['status'], 'DIFF', row_popup['checks'])
+        self.assertGreater(row_popup['visual']['differencePercent'], 0.5)
+        self.assertEqual(row_clean['status'], 'PASS', [(c['check_id'], c['status'], c['reason_code']) for c in row_clean['checks']])
+
+    def test_third_party_tracker_block_does_not_make_capture_non_comparable(self):
+        from qa.engine import _origin
+        record = {'url': 'https://a.test/', 'issues': [
+            {'category': 'POLICY_BLOCKED', 'renderingRelevant': False, 'url': 'https://www.googletagmanager.com/gtag/js'}], 'readiness': {}, 'captureReady': True}
+        blocked = [item for item in record['issues'] if item['category'] in ('POLICY_BLOCKED', 'EXECUTION_BLOCKED')]
+        self.assertFalse(any(item.get('renderingRelevant') for item in blocked))

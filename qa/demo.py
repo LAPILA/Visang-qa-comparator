@@ -141,7 +141,10 @@ def _page(side, feature, query, signed_in=None):
         for item_id, text in notices
     )
     if feature == "":
-        body = (f'<section id="home-notice"><h2>Notices</h2><ul>{notice_list}</ul></section>'
+        popup = ('<div id="demo-popup" class="layer-popup" role="dialog" style="position:fixed;left:10%;top:10%;width:80%;height:50%;background:#fff;border:2px solid #aa4560;z-index:50;padding:20px">'
+                 '<h2>오늘의 공지</h2><p>Synthetic marketing popup shown only with ?popup=1.</p>'
+                 '<button id="demo-popup-close" type="button">오늘 하루 보지 않기</button></div>') if query.get("popup", [""])[0] == "1" else ""
+        body = (popup + f'<section id="home-notice"><h2>Notices</h2><ul>{notice_list}</ul></section>'
                 '<section><h2>Safe interface state</h2><button id="safe-toggle" type="button" aria-expanded="false" '
                 'aria-controls="safe-panel">Show details</button><div id="safe-panel" hidden>Deterministic local panel.</div></section>'
                 f'<section class="trap" data-qa-risk="mutation"><h2>Safety traps — do not execute</h2>'
@@ -183,6 +186,8 @@ def _page(side, feature, query, signed_in=None):
 <script>
 const toggle = document.getElementById('safe-toggle');
 if(toggle) toggle.addEventListener('click', () => {{ const panel = document.getElementById('safe-panel'); panel.hidden = !panel.hidden; toggle.setAttribute('aria-expanded', String(!panel.hidden)); }});
+const popupClose = document.getElementById('demo-popup-close');
+if(popupClose) popupClose.addEventListener('click', () => {{ document.getElementById('demo-popup').remove(); }});
 const field = document.getElementById('limited-input');
 if(field) field.addEventListener('input', () => {{ document.getElementById('input-count').textContent = String(field.value.length); }});
 </script></body></html>'''

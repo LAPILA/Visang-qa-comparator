@@ -126,7 +126,7 @@ def profiles(base_origin):
                        'environments': environments, 'disabled': False,
                        'description': '사용자 등록 주소 · 제품과 A/B 환경을 선택하세요. 실제 접속·로그인 여부는 검사에서 확인합니다.',
                        'defaults': {**deepcopy(common), 'resourceHosts': list(PROFILE_RESOURCE_HOSTS.get(key, [])),
-                                    'observationMode': 'lenient', 'visualThreshold': 8,
+                                    'observationMode': 'lenient', 'visualThreshold': 8, 'autoDismiss': True,
                                     # vivasam mobile/PC gate: every route lands on /coverPage (or /#/coverPage) until dismissed.
                                     'entry': {'selector': 'button, a, [role=button]',
                                               'text': '모바일웹으로 계속하기|모바일 웹으로 이동하기' if 'mobile' in key else 'PC버전으로 계속하기|PC 버전으로 계속하기',
@@ -219,6 +219,7 @@ def public_options(options):
              'xhr_policy': 'xhrPolicy', 'dismiss_selectors': 'dismissSelectors',
              'observation_mode': 'observationMode', 'smoke_actions': 'smokeActions', 'smoke_action_limit': 'smokeActionLimit',
              'safety_level': 'safetyLevel', 'smoke_fill_text': 'smokeFillText', 'capture_settle_ms': 'captureSettleMs',
+             'auto_dismiss': 'autoDismiss',
              'crawl_scope': 'crawlScope', 'baseline_name': 'baselineName', 'candidate_name': 'candidateName',
              'baseline_environment_id': 'baselineEnvironmentId', 'candidate_environment_id': 'candidateEnvironmentId'}
     return {names.get(key, key): value for key, value in options.items()
@@ -377,6 +378,7 @@ def parse_options(data, base_origin):
         'smoke_actions': smoke_actions, 'smoke_action_limit': _number(merged, 'smokeActionLimit', 20, 0, 100, True),
         'safety_level': safety_level, 'smoke_fill_text': _text(merged.get('smokeFillText', 'QA자동테스트'), '스모크 입력값', 100),
         'capture_settle_ms': _number(merged, 'captureSettleMs', 4000, 0, 15000, True),
+        'auto_dismiss': _boolean(merged.get('autoDismiss', False)),
         'resource_hosts': sorted(resource_hosts),
         'private_mask_selectors': private_masks,
         'profile_id': profile_id, 'operator_id': _text(merged.get('operatorId', 'QA-A'), '담당자', 50),

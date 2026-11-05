@@ -402,10 +402,16 @@ def _network_guard(context, options, seeds, side, state, budget):
                 item['requestId'] = _request_metadata(request, state, record)['requestId']
             state['blocked'].append(item)
             if record is not None:
+                # A blocked tracker on a foreign host does not change what the page looks like; a blocked
+                # first-party or approved-host resource might. Only the latter makes a capture non-comparable.
+                first_party = _origin(request.url) == _origin(record['url'])
+                approved_host = host_allowed(request.url, options['allowed_hosts']) or host_allowed(request.url, options.get('resource_hosts', []))
+                rendering_relevant = (first_party or approved_host) and request.resource_type in (
+                    'document', 'stylesheet', 'script', 'image', 'font', 'media', 'xhr', 'fetch')
                 _append_issue(record, 'EXECUTION_BLOCKED' if unexecuted_status(reason) == 'BLOCKED' else 'POLICY_BLOCKED',
                               unexecuted_status(reason), reason, request.url,
                               resourceType=request.resource_type, method=request.method,
-                              requestId=item.get('requestId'), source='POLICY')
+                              requestId=item.get('requestId'), source='POLICY', renderingRelevant=rendering_relevant)
             route.abort('blockedbyclient')
         else:
             route.continue_()
@@ -694,9 +700,57 @@ def _smoke_actions(page, record, options, budget, side, register):
                 break
 
 
+_AUTO_DISMISS_JS = r'''() => {
+  const vw = innerWidth, vh = innerHeight;
+  const visible = el => { const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none' && r.bottom > 0 && r.top < vh; };
+  const closeText = /^(닫기|close|×|x|✕|확인|오늘\s*하루\s*(보지\s*않기|닫기)|(오늘|7일간?|일주일|다시)\s*(보지\s*않기|열지\s*않기)|do not show|don't show|dismiss)$/i;
+  const layers = [...document.querySelectorAll('[role=dialog],[aria-modal="true"],[class*="popup" i],[class*="modal" i],[class*="layer" i],[id*="popup" i],[id*="modal" i],[class*="notice-pop" i]')]
+    .filter(el => visible(el) && (['fixed','absolute'].includes(getComputedStyle(el).position) || el.getAttribute('role') === 'dialog'))
+    .filter(el => { const r = el.getBoundingClientRect(); return r.width * r.height > vw * vh * 0.04; });
+  const out = [];
+  for (const layer of layers.slice(0, 5)) {
+    const controls = [...layer.querySelectorAll('button, a, [role=button], input[type=button], label, span, i, em')].filter(visible);
+    let control = controls.find(el => closeText.test((el.textContent || el.getAttribute('aria-label') || el.getAttribute('title') || el.value || '').replace(/\s+/g, ' ').trim()))
+      || controls.find(el => /close|btn-x|ico-x|dismiss/i.test(el.className + ' ' + (el.id || '') + ' ' + (el.getAttribute('aria-label') || '')));
+    if (!control) continue;
+    const path = []; let node = control;
+    while (node && node !== document.body && path.length < 6) { const parent = node.parentElement; if (!parent) break; const idx = [...parent.children].indexOf(node) + 1; path.unshift(node.tagName.toLowerCase() + ':nth-child(' + idx + ')'); node = parent; }
+    out.push({ selector: path.join(' > '), text: (control.textContent || control.getAttribute('aria-label') || '').trim().slice(0, 40), layer: (layer.id ? '#' + layer.id : '.' + String(layer.className).split(' ')[0]) });
+  }
+  return out;
+}'''
+
+
 def _dismiss_overlays(page, record, options, side, budget):
-    """Close marketing popups/layers before capture; each close is recorded, never assumed."""
+    """Close marketing popups/layers before capture; each close is recorded, never assumed.
+
+    Configured selectors run first; then, with ``auto_dismiss`` (profile default), any
+    visible fixed/dialog layer covering >4% of the viewport is closed through its own
+    닫기/close/오늘 하루 보지 않기 control. Nothing outside such a layer is clicked.
+    """
     closed = []
+    if options.get('auto_dismiss', False):
+        for _round in range(3):
+            try:
+                found = page.evaluate(_AUTO_DISMISS_JS) or []
+            except Exception:
+                found = []
+            if not found:
+                break
+            progressed = False
+            for item in found:
+                try:
+                    locator = page.locator('body > ' + item['selector']) if not item['selector'].startswith('html') else page.locator(item['selector'])
+                    locator = page.locator(item['selector']) if locator.count() == 0 else locator
+                    if locator.count() and locator.first.is_visible():
+                        locator.first.click(timeout=budget.timeout(1500))
+                        page.wait_for_timeout(min(250, budget.timeout(250)))
+                        closed.append(f"auto:{item['layer']} → {item['text'] or 'close'}")
+                        progressed = True
+                except Exception:
+                    continue
+            if not progressed:
+                break
     for selector in list(options.get('dismiss_selectors', []))[:10]:
         try:
             locator = page.locator(selector).first
@@ -710,7 +764,7 @@ def _dismiss_overlays(page, record, options, side, budget):
     if closed:
         record['dismissed'] = closed
         record['checks'].append(check(side + '.dismiss', 'PASS', 'OVERLAYS_DISMISSED',
-                                      expected='Configured overlays closed before capture', actual=closed, required=False))
+                                      expected='Overlays closed before capture', actual=closed, required=False))
 
 
 def _flexible_text(text):
@@ -835,7 +889,7 @@ def _visit(context, url, side, depth, options, artifact_root, run_id, budget, st
             # A cover gate can swallow any route until it is dismissed, so with a urlPattern
             # the entry action may apply on deeper pages too (it skips when the pattern misses).
             _apply_entry_action(page, record, options, side, budget)
-        if options.get('dismiss_selectors'):
+        if options.get('dismiss_selectors') or options.get('auto_dismiss'):
             _dismiss_overlays(page, record, options, side, budget)
         info = _discover(page, options, record, side)
         if info is None:
@@ -920,9 +974,14 @@ def _visit(context, url, side, depth, options, artifact_root, run_id, budget, st
             _smoke_actions(page, record, options, budget, side, register)
         # Capture the settled baseline state before scenario actions mutate local UI.
         record['_active_scenario'], record['_active_step'] = 'engine', 'capture'
-        if any(item['category'] in ('POLICY_BLOCKED', 'EXECUTION_BLOCKED') for item in record['issues']):
-            record['captureReady'] = False
+        blocked = [item for item in record['issues'] if item['category'] in ('POLICY_BLOCKED', 'EXECUTION_BLOCKED')]
+        if blocked:
             record['readiness']['policyInterference'] = True
+            record['readiness']['blockedThirdParty'] = sum(not item.get('renderingRelevant') for item in blocked)
+        if any(item.get('renderingRelevant') for item in blocked):
+            # Something the page itself needs was refused: the screenshot may not represent the product.
+            record['captureReady'] = False
+            record['readiness']['renderingBlocked'] = [sanitize_url(item['url']) for item in blocked if item.get('renderingRelevant')][:10]
         if options.get('conditions'):
             record['_conditions_started'] = True
             from .conditions import run_condition_checks
@@ -1597,7 +1656,7 @@ def run_scan(options, run_id, artifact_root, progress, cancelled, auth_gate=None
                  route_equivalence=bool(options.get('route_equivalence', True)),
                  login_form={key: value for key, value in (options.get('login') or {}).items()} or None,
                  entry=options.get('entry') or None, xhr_policy=options.get('xhr_policy', 'allow_allowed_hosts'),
-                 dismiss_selectors=options.get('dismiss_selectors', []), observation_mode=options.get('observation_mode', 'strict'),
+                 dismiss_selectors=options.get('dismiss_selectors', []), auto_dismiss=bool(options.get('auto_dismiss')), observation_mode=options.get('observation_mode', 'strict'),
                  smoke_actions=bool(options.get('smoke_actions')), smoke_action_limit=int(options.get('smoke_action_limit', 20)),
                  safety_level=options.get('safety_level', 'strict'))
     checksum = lambda value: sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode('utf-8')).hexdigest()
@@ -1623,7 +1682,7 @@ def run_scan(options, run_id, artifact_root, progress, cancelled, auth_gate=None
                                               'b': options.get('candidate_environment_id', 'custom')} if comparison else {'a': options.get('baseline_environment_id', 'custom')},
                               pairStartPages=bool(start_pair), routeEquivalence=bool(options.get('route_equivalence', True)),
                               entry=options.get('entry') or None, xhrPolicy=options.get('xhr_policy', 'allow_allowed_hosts'),
-                              dismissSelectors=options.get('dismiss_selectors', []), observationMode=options.get('observation_mode', 'strict'),
+                              dismissSelectors=options.get('dismiss_selectors', []), autoDismiss=bool(options.get('auto_dismiss')), observationMode=options.get('observation_mode', 'strict'),
                               smokeActions=bool(options.get('smoke_actions')), safetyLevel=options.get('safety_level', 'strict'),
                               login={'method': 'MANUAL' if options.get('manual_login') else 'TEST_ACCOUNT' if options.get('login') else 'NONE',
                                      'form': {key: value for key, value in (options.get('login') or {}).items()} or None,
