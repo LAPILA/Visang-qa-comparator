@@ -16,16 +16,17 @@
     <nav aria-label="주 메뉴">
       <a href="/m_dashboard.html" data-page="dashboard"><span class="nav-icon">▦</span>대시보드</a>
       <a href="/m_project_settings.html" data-page="projects"><span class="nav-icon">▣</span>프로젝트 설정</a>
+      <a href="/m_rules.html" data-page="rules"><span class="nav-icon">◇</span>검사 규칙</a>
       <a href="/" data-page="run"><span class="nav-icon">▶</span>검사 실행·결과</a>
     </nav>
-    <div class="side-note"><strong>프로젝트 설정</strong>프로젝트와 환경 목록은 이 브라우저(localStorage)에만 저장됩니다. 담당자·검사 조건은 실행할 때 입력합니다.</div>
+    <div class="side-note"><strong>프로젝트 설정</strong>프로젝트·환경은 이 PC의 설정 파일(기본) 또는 로컬 PostgreSQL에 저장됩니다. 비밀번호는 암호화해 저장하고 화면·API·보고서에 다시 나오지 않습니다.</div>
     <div class="theme-switch" role="group" aria-label="테마"><button type="button" data-theme="light">☀ 라이트</button><button type="button" data-theme="dark">☾ 다크</button><button type="button" data-theme="system">◐ 시스템</button></div>
   </aside>
   <div class="shell">
     <nav class="topbar" aria-label="현재 위치"><span>워크스페이스 / <strong>프로젝트 설정</strong></span><span class="version-pill" id="versionPill">LOCAL</span></nav>
     <main class="layout">
-      <div class="page-head"><div><p class="eyebrow">PROJECTS</p><h1>프로젝트 설정</h1><p class="lead">프로젝트와 검사 환경의 이름·URL을 등록합니다. 첫 환경이 A, 둘째가 B로 쓰입니다.</p></div><button class="primary" id="newProject" type="button">+ 새 프로젝트</button></div>
-      <div id="notice" class="notice success-notice" role="status">브라우저에 저장된 프로젝트를 불러오는 중입니다.</div>
+      <div class="page-head"><div><p class="eyebrow">PROJECTS</p><h1>프로젝트 설정</h1><p class="lead">프로젝트별 검사 환경과 (선택) 로그인 정보를 등록합니다. 첫 환경이 A, 둘째가 B로 쓰입니다. <span id="storagePill" class="storage-pill">저장소 확인 중</span></p></div><button class="primary" id="newProject" type="button">+ 새 프로젝트</button></div>
+      <div id="notice" class="notice success-notice" role="status">프로젝트를 불러오는 중입니다.</div>
       <div class="projects-layout">
         <section class="card"><div class="card-head"><div><h2>내 프로젝트</h2><p>프로젝트를 선택해 환경을 편집하세요.</p></div></div><div id="projectList" class="project-list"></div></section>
         <section class="card">
@@ -34,7 +35,7 @@
             <div class="fields"><label>프로젝트 이름<input name="name" maxlength="60" required placeholder="예: 초등 PC"></label></div>
             <div class="env-heading"><h3>등록 환경</h3><button class="secondary" id="addEnvironment" type="button">+ 환경 추가</button></div>
             <div id="environmentRows" class="environment-rows"></div>
-            <p class="hint">최소 한 개의 환경이 필요합니다. 저장만으로 사이트에 접속하거나 검사를 시작하지 않습니다.</p>
+            <p class="hint">최소 한 개의 환경이 필요합니다. 로그인 URL·ID·비밀번호는 선택이며, 인증 상태가 <b>로그인</b>인 검사에서만 씁니다(공용 테스트 계정보다 우선). 비밀번호 칸을 비우면 기존 값을 유지합니다. 저장만으로 사이트에 접속하거나 검사를 시작하지 않습니다.</p>
             <div class="form-row"><button class="secondary" type="submit">프로젝트 저장</button><button class="primary" id="useProject" type="button">검사 설정에 적용 →</button><button class="secondary danger" id="deleteProject" type="button">삭제</button></div>
           </form>
         </section>

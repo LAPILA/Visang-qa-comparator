@@ -9,8 +9,10 @@ logged and never echoed back to the UI. A missing or malformed source yields
 Resolution order for side ``a``/``b`` and ``accountKey`` (default ``default``):
 
 1. ``QA_LOGIN_A_ID`` / ``QA_LOGIN_A_PW`` (side-specific environment variables)
-2. ``QA_LOGIN_ID`` / ``QA_LOGIN_PW`` (shared environment variables)
-3. ``QA_SECRETS_FILE`` or ``./secrets/accounts.json``::
+2. The environment's own login ID/PW registered in 프로젝트 설정 (``project_ref``),
+   decrypted server-side by ``qa.projects_db`` — only when the run selected that environment
+3. ``QA_LOGIN_ID`` / ``QA_LOGIN_PW`` (shared environment variables)
+4. ``QA_SECRETS_FILE`` or ``./secrets/accounts.json``::
 
        {"accounts": {"default": {"id": "tester", "pw": "..."},
                      "default.b": {"id": "tester-b", "pw": "..."}}}
@@ -31,10 +33,10 @@ _MAX_LENGTH = 200
 class Credentials:
     """Opaque holder: repr/str never reveal the secret values."""
 
-    __slots__ = ('username', 'password', 'source')
+    __slots__ = ('username', 'password', 'source', 'login_url')
 
-    def __init__(self, username, password, source):
-        self.username, self.password, self.source = username, password, source
+    def __init__(self, username, password, source, login_url=None):
+        self.username, self.password, self.source, self.login_url = username, password, source, login_url
 
     def __repr__(self):
         return f'Credentials(source={self.source!r}, username=[REDACTED], password=[REDACTED])'
@@ -49,8 +51,8 @@ def _clean(value):
     return value if 0 < len(value) <= _MAX_LENGTH else None
 
 
-def _from_environment(side, environ):
-    for prefix in (f'QA_LOGIN_{side.upper()}_', 'QA_LOGIN_'):
+def _from_environment(side, environ, prefixes=None):
+    for prefix in prefixes or (f'QA_LOGIN_{side.upper()}_', 'QA_LOGIN_'):
         username, password = _clean(environ.get(prefix + 'ID')), _clean(environ.get(prefix + 'PW'))
         if username and password:
             return Credentials(username, password, 'environment:' + prefix.rstrip('_'))
@@ -79,12 +81,26 @@ def _from_file(side, account_key, environ, root):
     return None
 
 
-def load_credentials(side, account_key='default', *, environ=None, root=None):
+def _from_project(project_ref):
+    if not isinstance(project_ref, dict) or not project_ref.get('projectId') or not project_ref.get('environmentId'):
+        return None
+    from . import projects_db
+    found = projects_db.environment_credentials(project_ref['projectId'], project_ref['environmentId'])
+    if not found:
+        return None
+    username, password, login_url = _clean(found[0]), _clean(found[1]), found[2]
+    if username and password:
+        return Credentials(username, password, 'project:environment', login_url)
+    return None
+
+
+def load_credentials(side, account_key='default', *, environ=None, root=None, project_ref=None):
     """Return Credentials or None. Callers must not store the result in reports."""
     environ = os.environ if environ is None else environ
     root = PROJECT_ROOT if root is None else root
     side = 'a' if str(side).lower() in ('a', 'baseline') else 'b'
-    return _from_environment(side, environ) or _from_file(side, account_key or 'default', environ, root)
+    return (_from_environment(side, environ, (f'QA_LOGIN_{side.upper()}_',)) or _from_project(project_ref)
+            or _from_environment(side, environ, ('QA_LOGIN_',)) or _from_file(side, account_key or 'default', environ, root))
 
 
 def _secrets_path(environ=None, root=None):

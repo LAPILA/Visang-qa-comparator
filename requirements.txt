@@ -1,3 +1,5 @@
 # Versions observed in the verified local development environment.
 playwright==1.64.1
 Pillow==12.3.0
+cryptography==46.0.3      # 프로젝트 설정의 환경별 비밀번호 암호화 (Fernet)
+psycopg[binary]==3.2.12   # 선택: PG* 설정이 있을 때만 PostgreSQL 저장소 사용

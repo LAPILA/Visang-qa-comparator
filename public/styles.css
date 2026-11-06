@@ -647,3 +647,36 @@ a.primary { display: inline-flex; align-items: center; }
 .credential-form .primary, .credential-form .secondary { min-height: 40px; }
 @media (max-width: 880px) { .credential-form { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 550px) { .credential-form { grid-template-columns: 1fr; } }
+
+/* 18. 인증 상태 · 프로젝트 환경 로그인 · 검사 규칙 (1105_mia 통합) --------- */
+.auth-mode { display: grid; grid-template-columns: auto repeat(3, minmax(0, 1fr)); gap: 8px; align-items: stretch; margin-top: 14px; }
+.auth-mode-label { align-self: center; font-size: var(--fs-xs); font-weight: 800; color: var(--text-2); padding-right: 4px; }
+.auth-mode label { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); cursor: pointer; }
+.auth-mode label:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 3px var(--accent-ring); }
+.auth-mode input { margin-top: 3px; accent-color: var(--accent); }
+.auth-mode b { display: block; font-size: var(--fs-sm); color: var(--text); }
+.auth-mode small { display: block; color: var(--muted); font-size: 10.5px; line-height: 1.45; margin-top: 2px; }
+.environment-login-fields { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr) auto; gap: 10px; align-items: end; padding-top: 10px; border-top: 1px dashed var(--line-strong); }
+.clear-password { display: flex !important; align-items: center; gap: 6px; font-weight: 600 !important; white-space: nowrap; padding-bottom: 10px; }
+.environment-row .env-remove { grid-row: 1; grid-column: 3; }
+.storage-pill { display: inline-flex; gap: 6px; align-items: center; padding: 4px 10px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); color: var(--text-2); font-size: var(--fs-xs); font-weight: 700; }
+.project-picker { display: flex; align-items: center; gap: 12px; margin: 0 0 16px; font-size: var(--fs-xs); font-weight: 700; color: var(--text-2); }
+.project-picker select { min-width: 240px; }
+.rules-layout { display: grid; grid-template-columns: minmax(260px, .9fr) minmax(0, 1.4fr); gap: 18px; }
+.rule-list { display: grid; gap: 8px; }
+.rule-item { border: 1px solid var(--line); border-radius: var(--r-md); padding: 12px 14px; display: grid; grid-template-columns: 1fr auto; gap: 10px; background: var(--surface); }
+.rule-item.selected { border-color: var(--accent); background: var(--accent-soft); }
+.rule-item button.link { padding: 0; border: 0; background: transparent; text-align: left; color: inherit; min-height: 0; box-shadow: none; }
+.rule-item strong { display: block; font-size: var(--fs-sm); }
+.rule-item small { display: block; color: var(--muted); margin-top: 4px; font-size: 10.5px; line-height: 1.5; word-break: break-all; }
+.rule-toggle { align-self: start; display: flex; align-items: center; gap: 5px; font-size: var(--fs-xs); color: var(--text-2); }
+.rule-toggle input { accent-color: var(--accent); }
+.rule-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.rule-fields label { display: grid; gap: 6px; font-size: var(--fs-xs); font-weight: 700; color: var(--text-2); }
+.rule-fields .wide { grid-column: 1 / -1; }
+.rule-fields .hidden { display: none; }
+@media (max-width: 1150px) { .rules-layout { grid-template-columns: 1fr; } .auth-mode { grid-template-columns: 1fr; } .environment-login-fields { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 700px) { .rule-fields, .environment-login-fields { grid-template-columns: 1fr; } .project-picker { flex-direction: column; align-items: flex-start; } .project-picker select { width: 100%; } }
+.auth-mode input[type=radio], .clear-password input, .rule-toggle input { min-height: 0; padding: 0; width: auto; box-shadow: none; }
+.environment-row label > input:not([type=checkbox]), .rule-fields input, .rule-fields select, .rule-fields textarea, .fields input { width: 100%; min-width: 0; }
+.environment-row > label, .environment-login-fields > label { min-width: 0; }

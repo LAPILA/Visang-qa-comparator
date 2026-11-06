@@ -4,6 +4,28 @@
 
 실사이트는 로그인이 필요하다. 이 도구는 두 가지 방법을 제공하며, 어느 쪽도 **비밀번호를 API·보고서·CSV·화면·로그에 남기지 않는다.**
 
+## 0. 인증 상태 — 로그인 / 비로그인 / 수동 (v0.5.0, 요구사항: [m_requirements](m_requirements.md))
+
+검사 설정 1단계의 **인증 상태**가 유일한 기준이다(API `authMode`). 예전 `manualLogin`·`login` 조합은 서버가 이 값 하나로 정리하므로 모순된 설정이 실행되지 않는다.
+
+| 인증 상태 | 로그인 단계 | 탐색 중 로그인 링크 | 로그인 화면으로 이동되면 |
+|---|---|---|---|
+| `anonymous` 비로그인 | 안 함, 계정 안 읽음 | 열지 않음 (`LOGIN_LINK_ANONYMOUS`) | `a.auth` **SKIP** `LOGIN_REQUIRED_ANONYMOUS` + 캡처 증거, 그 화면의 링크는 따라가지 않고 직전(링크가 있던) 페이지 기준으로 계속 → 검수 분류 **미실행** (PASS로 세지 않음) |
+| `login` 로그인 | 시작 전에 자동 로그인 (계정 없으면 **시작 전에** 어떤 환경인지 알려 주고 거부) | 이미 로그인됨 (`LOGIN_LINK_ALREADY_AUTHENTICATED`) | 세션 만료로 보고 **1회 재로그인 후 원래 페이지 재방문**(`RELOGIN_OK`), 실패하면 **BLOCKED** `LOGIN_SESSION_LOST` (환경당 재로그인 최대 2회) |
+| `manual` 수동 로그인 | 브라우저 창에서 사람이 로그인 | 기존과 동일 | 기존과 동일 |
+
+로그인/비로그인 화면 판정: 보이는 비밀번호 입력란, 또는 `/login`·`/member/login.do`·`/#/login`·`/signin` 같은 로그인 경로. 헤더의 `로그인` 버튼은 어느 모드에서도 스모크 클릭하지 않는다(`LOGIN_ACTION_NOT_SMOKED`). 보고서 `manifest.auth`에 모드·환경별 로그인 성공 여부·계정 출처 종류·이동 기록(`url`, `landedUrl`, `returnTo`, `result`)이 남는다. 비밀번호·쿠키·세션 토큰은 기록하지 않는다.
+
+### 계정을 찾는 순서
+
+1. `QA_LOGIN_A_ID/PW` (B는 `_B_`) 환경변수
+2. **프로젝트 설정의 환경별 로그인 ID·비밀번호** — 검사에서 그 프로젝트 환경을 A/B로 골랐을 때만. UI는 `credentialRefs: {a: {projectId, environmentId}}` **ID만** 보내고, 비밀번호는 서버가 저장소에서 복호화해 로그인 단계에서만 쓴다. 환경의 로그인 페이지 URL도 함께 쓴다.
+3. `QA_LOGIN_ID/PW` 공용 환경변수
+4. `secrets/accounts.json` 공용 테스트 계정 (4단계 ‘계정 저장’ 또는 `setup_login_windows.bat`)
+
+환경별 비밀번호는 `local-settings/projects.json` 또는 PostgreSQL에 **Fernet 암호문**으로만 저장되고, 키 `QA_CREDENTIAL_KEY`는 처음 저장할 때 `.env`(git 제외)에 생성된다. 키를 잃으면 저장된 비밀번호는 복호화되지 않으며(로그인 정보 없음으로 처리), 다시 입력하면 된다. `/api/projects` 응답에는 `hasPassword`만 있다.
+
+
 ## 1. 테스트 계정 자동 로그인 (권장 · 반복 실행용)
 
 ### 선택자 없이: 자동 탐지 (기본)

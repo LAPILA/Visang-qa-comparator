@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>검사 규칙 · VISANG QA AI</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <script src="/theme-boot.js"></script>
+  <script type="module" src="/shell.js"></script>
+  <script type="module" src="/m_rules.js"></script>
+</head>
+<body data-page="rules">
+<div class="app">
+  <aside class="sidebar">
+    <a class="brand-link" href="/m_dashboard.html"><span class="brand-mark" aria-hidden="true">V</span><span>VISANG <em>QA AI</em></span></a>
+    <p class="nav-caption">WORKSPACE</p>
+    <nav aria-label="주 메뉴">
+      <a href="/m_dashboard.html" data-page="dashboard"><span class="nav-icon">▦</span>대시보드</a>
+      <a href="/m_project_settings.html" data-page="projects"><span class="nav-icon">▣</span>프로젝트 설정</a>
+      <a href="/m_rules.html" data-page="rules"><span class="nav-icon">◇</span>검사 규칙</a>
+      <a href="/" data-page="run"><span class="nav-icon">▶</span>검사 실행·결과</a>
+    </nav>
+    <div class="side-note"><strong>조건 기반 UI 규칙</strong>규칙은 이 브라우저에 저장됩니다. 활성 규칙을 검사 설정으로 가져온 뒤 대상 환경과 선행 조건을 확인하세요. 규칙은 화면을 읽기만 합니다.</div>
+    <div class="theme-switch" role="group" aria-label="테마"><button type="button" data-theme="light">☀ 라이트</button><button type="button" data-theme="dark">☾ 다크</button><button type="button" data-theme="system">◐ 시스템</button></div>
+  </aside>
+  <div class="shell">
+    <nav class="topbar" aria-label="현재 위치"><span>워크스페이스 / <strong>검사 규칙</strong></span><span class="version-pill" id="versionPill">LOCAL</span></nav>
+    <main class="layout">
+      <div class="page-head"><div><p class="eyebrow">CONDITIONS</p><h1>검사 규칙</h1><p class="lead">어떤 화면 요소를 어떤 기대값으로 확인할지 프로젝트별로 정의합니다. 긴 제목 넘침·빈 목록 안내·버튼 개수 같은 계약을 조건 기반 UI QA로 실행합니다.</p></div><button class="primary" id="newRule" type="button">+ 새 규칙</button></div>
+      <div id="notice" class="notice success-notice" role="status">규칙을 불러오는 중입니다.</div>
+      <label class="project-picker">프로젝트 <select id="projectId"><option value="">프로젝트를 선택하세요</option></select></label>
+      <div class="rules-layout">
+        <section class="card"><div class="card-head"><div><h2>등록 규칙</h2><p>활성 규칙만 검사 설정으로 가져옵니다.</p></div></div><div id="ruleList" class="rule-list"></div></section>
+        <section class="card">
+          <div class="card-head"><div><h2 id="formTitle">규칙 만들기</h2><p>현재 화면을 읽는 조건만 등록할 수 있습니다.</p></div></div>
+          <form id="ruleForm">
+            <div class="rule-fields">
+              <label>규칙 이름<input name="name" required maxlength="100" placeholder="예: 빈 목록 안내 표시"></label>
+              <label>규칙 ID<input name="ruleId" required maxlength="100" pattern="[A-Za-z0-9_.-]+" placeholder="notice.empty.message"></label>
+              <label>적용 URL 패턴<input name="urlPattern" maxlength="2000" placeholder="예: /notice*"></label>
+              <label>요소 선택자<input name="selector" required maxlength="500" placeholder="예: #empty-message"></label>
+              <label>검사 종류<select name="kind"><option value="visible">표시 여부</option><option value="count">요소 개수</option><option value="text_length">텍스트 길이</option><option value="overflow">넘침 여부</option><option value="attribute">속성 값</option></select></label>
+              <label id="booleanField">기대 결과<select name="booleanExpected"><option value="true">참 · 표시/넘침 있음</option><option value="false">거짓 · 표시/넘침 없음</option></select></label>
+              <label id="numberField" class="hidden">기대 개수·길이 (정확히)<input name="numberExpected" type="number" min="0" max="1000000" step="1" value="0"></label>
+              <label id="attributeField" class="hidden">속성 이름<input name="attribute" maxlength="100" placeholder="예: aria-label"></label>
+              <label id="textField" class="hidden">기대 속성 값<input name="textExpected" maxlength="500" placeholder="예: 열기"></label>
+              <label id="unitField" class="hidden">길이 단위<select name="unit"><option value="codepoints">Unicode code point</option><option value="utf16">UTF-16 code unit</option></select></label>
+              <label class="wide">선행 조건 JSON 배열 (선택)<textarea name="preconditions" rows="4" spellcheck="false" placeholder="[]">[]</textarea></label>
+            </div>
+            <p class="hint">선행 조건은 최대 10개입니다. 예: [{"selector":".notice-row","kind":"count","expected":{"equals":0}}]. 데이터 조건을 만족하지 못하면 BLOCKED로 기록됩니다. 규칙 저장은 과거 결과를 변경하지 않습니다.</p>
+            <div class="form-row"><button class="secondary" type="submit">규칙 저장</button><button class="primary" id="applyRules" type="button">활성 규칙을 검사 설정에 적용 →</button><button class="secondary danger" id="deleteRule" type="button">삭제</button></div>
+          </form>
+        </section>
+      </div>
+    </main>
+  </div>
+</div>
+</body>
+</html>

@@ -21,6 +21,7 @@ from urllib.parse import urlsplit
 
 from qa import __version__
 from qa.config import parse_options, profiles, validate_url
+from qa.projects_db import StorageError
 from qa.store import ReportStore, ReviewConflict, RunDirectoryLease, redact, timestamp
 
 ROOT = Path(__file__).resolve().parent
@@ -428,7 +429,8 @@ class Handler(BaseHTTPRequestHandler):
                       '/m_dashboard.html': ('m_dashboard.html', 'text/html'),
                       '/m_project_settings.html': ('m_project_settings.html', 'text/html'),
                       '/m_workspace.js': ('m_workspace.js', 'text/javascript'),
-                      '/m_project_settings.js': ('m_project_settings.js', 'text/javascript')}
+                      '/m_project_settings.js': ('m_project_settings.js', 'text/javascript'),
+                      '/m_rules.html': ('m_rules.html', 'text/html'), '/m_rules.js': ('m_rules.js', 'text/javascript')}
             if path in static:
                 name, mime = static[path]
                 return self.send_bytes(200, (PUBLIC / name).read_bytes(), mime + '; charset=utf-8')
@@ -447,6 +449,11 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/credentials':
                 from qa.secrets import credentials_status
                 return self.json_response(200, credentials_status(), redact_payload=False)
+            if path == '/api/projects':
+                from qa import projects_db
+                # Passwords never leave the store: environments only carry hasPassword.
+                return self.json_response(200, {'projects': projects_db.list_projects(), 'storage': projects_db.status()},
+                                          redact_payload=False)
             if path.startswith('/api/scans/') and path.endswith('/inventory.csv'):
                 run_id = path.removeprefix('/api/scans/').removesuffix('/inventory.csv')
                 job = self.server.service.get(run_id)
@@ -486,6 +493,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.json_response(404, {'error': '이미지를 찾을 수 없습니다.'})
                 return self.send_bytes(200, target.read_bytes(), 'image/png')
             return self.json_response(404, {'error': '찾을 수 없는 경로입니다.'})
+        except StorageError as exc:
+            return self.json_response(503, {'error': str(exc)})
         except (ValueError, OSError) as exc:
             return self.json_response(400, {'error': str(exc)})
 
@@ -516,6 +525,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json_response(503, {'error': '서버가 종료 중입니다. 새 서버에서 다시 시도하세요.'})
             if path == '/api/scans':
                 options = parse_options(data, self.server.base_origin)
+                require_login_credentials(options)
                 run_id = self.server.service.start(options)
                 return self.json_response(202, {'id': run_id})
             if path == '/api/credentials':
@@ -524,6 +534,14 @@ class Handler(BaseHTTPRequestHandler):
                 status = save_shared_credentials(data.get('id'), data.get('pw'))
                 data.clear()
                 return self.json_response(200, status, redact_payload=False)
+            if path == '/api/projects/save':
+                from qa import projects_db
+                project = projects_db.save_project(data)
+                data.clear()
+                return self.json_response(200, {'project': project}, redact_payload=False)
+            if path == '/api/projects/delete':
+                from qa import projects_db
+                return self.json_response(200, {'deleted': projects_db.delete_project(data.get('id', ''))})
             if path == '/api/credentials/clear':
                 from qa.secrets import clear_shared_credentials
                 return self.json_response(200, clear_shared_credentials(), redact_payload=False)
@@ -551,8 +569,25 @@ class Handler(BaseHTTPRequestHandler):
             return self.json_response(403, {'error': str(exc)})
         except ReviewConflict as exc:
             return self.json_response(409, {'error': str(exc)})
+        except StorageError as exc:
+            return self.json_response(503, {'error': str(exc)})
         except (ValueError, TypeError, KeyError, OSError) as exc:
             return self.json_response(400, {'error': str(exc)})
+
+
+def require_login_credentials(options):
+    """로그인 검사 needs an account for every side it will crawl: say which one is missing before starting."""
+    if options.get('auth_mode') != 'login':
+        return
+    from qa.secrets import load_credentials
+    sides = ['a', 'b'] if options.get('test_type') == 'comparison' else ['a']
+    key = (options.get('login') or {}).get('accountKey', 'default')
+    missing = [side for side in sides
+               if load_credentials(side, key, project_ref=(options.get('credential_refs') or {}).get(side)) is None]
+    if missing:
+        names = ', '.join(options.get('baseline_name' if side == 'a' else 'candidate_name') or side.upper() for side in missing)
+        raise ValueError(f'로그인 검사에 쓸 계정이 없습니다: {names}. 4단계 "공용 테스트 계정"에 ID·비밀번호를 저장하거나 '
+                         '프로젝트 설정에서 해당 환경의 로그인 ID·비밀번호를 등록하세요. 비로그인으로 검사하려면 인증 상태를 "비로그인"으로 바꾸세요.')
 
 
 def check_dependencies():

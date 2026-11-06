@@ -17,13 +17,14 @@
     <nav aria-label="주 메뉴">
       <a href="/m_dashboard.html" data-page="dashboard"><span class="nav-icon">▦</span>대시보드</a>
       <a href="/m_project_settings.html" data-page="projects"><span class="nav-icon">▣</span>프로젝트 설정</a>
+      <a href="/m_rules.html" data-page="rules"><span class="nav-icon">◇</span>검사 규칙</a>
       <a href="/" data-page="run"><span class="nav-icon">▶</span>검사 실행·결과</a>
     </nav>
     <div class="side-note"><strong>검사 결과 읽기</strong>실행 완료와 품질 판정은 다릅니다. 검수 분류(이슈·대인체크·재검)와 증거를 함께 확인하세요.</div>
     <div class="theme-switch" role="group" aria-label="테마"><button type="button" data-theme="light">☀ 라이트</button><button type="button" data-theme="dark">☾ 다크</button><button type="button" data-theme="system">◐ 시스템</button></div>
   </aside>
   <div class="shell">
-  <nav class="topbar" aria-label="현재 위치"><span>워크스페이스 / <strong>검사 실행·결과</strong></span><span class="topbar-links"><a href="#settingsTitle">검사 설정</a><a href="#historyTitle">실행 이력</a><a href="#resultTitle">검사 결과</a></span><span class="version-pill" id="versionPill">v0.4 · LOCAL</span></nav>
+  <nav class="topbar" aria-label="현재 위치"><span>워크스페이스 / <strong>검사 실행·결과</strong></span><span class="topbar-links"><a href="#settingsTitle">검사 설정</a><a href="#historyTitle">실행 이력</a><a href="#resultTitle">검사 결과</a></span><span class="version-pill" id="versionPill">v0.5 · LOCAL</span></nav>
   <main class="layout" id="top">
     <header class="page-header">
       <div class="hero">
@@ -60,10 +61,10 @@
           <fieldset class="step">
             <legend><span class="step-no">1</span>무엇을 검사할까요</legend>
             <div class="two-columns">
-              <label class="field"><span>프로젝트 · 브라우저에 저장된 환경 묶음</span><select id="projectId"><option value="">프로젝트 선택 안 함</option></select></label>
+              <label class="field"><span>프로젝트 · 등록한 환경 묶음</span><select id="projectId"><option value="">프로젝트 선택 안 함</option></select></label>
               <label class="field"><span>&nbsp;</span><a class="secondary-button" href="/m_project_settings.html">프로젝트 설정 열기 →</a></label>
             </div>
-            <p class="helper">프로젝트를 고르면 첫 환경이 A, 둘째 환경이 B로 들어갑니다. 등록 제품(비바샘 4종)은 아래 프로필에서 바로 고를 수 있습니다.</p>
+            <p class="helper">프로젝트를 고르면 첫 환경이 A, 둘째 환경이 B로 들어가고, 환경에 등록한 로그인 ID·비밀번호도 로그인 검사에 씁니다(서버에서만 복호화). 등록 제품(비바샘 4종)은 아래 프로필에서 바로 고를 수 있습니다. <span id="projectStorage"></span></p>
             <div class="two-columns">
               <label class="field"><span>제품 · 검사 프로필</span><select id="profileId" name="profileId" required><option value="">프로필 불러오는 중…</option></select></label>
               <label class="field"><span>실행 담당자</span><input id="operatorId" name="operatorId" required maxlength="50" placeholder="예: qa-a" autocomplete="off" /></label>
@@ -74,6 +75,13 @@
               <label id="previousRunField" class="field hidden"><span>비교할 과거 실행</span><select id="previousRunId" name="previousRunId" disabled><option value="">과거 실행을 선택하세요</option></select></label>
             </div>
             <p id="testTypeHint" class="helper">동일 제품의 A/B를 각각 검사한 뒤 승인된 페이지와 영역을 비교합니다.</p>
+            <div class="auth-mode" role="radiogroup" aria-labelledby="authModeLabel">
+              <span id="authModeLabel" class="auth-mode-label">인증 상태</span>
+              <label><input type="radio" name="authMode" value="anonymous" checked /><span><b>비로그인</b><small>로그인 화면은 검사하지 않고 직전 페이지로 복귀</small></span></label>
+              <label><input type="radio" name="authMode" value="login" /><span><b>로그인</b><small>테스트 계정으로 자동 로그인 후 검사 · 세션 만료 시 1회 재로그인</small></span></label>
+              <label><input type="radio" name="authMode" value="manual" /><span><b>수동 로그인</b><small>열린 브라우저에서 직접 로그인 후 계속</small></span></label>
+            </div>
+            <p id="authModeHint" class="helper">비로그인: 로그인 링크를 열지 않고, 로그인 화면으로 이동되면 SKIP(미실행)으로 남깁니다. 로그인이 필요한 기능을 PASS로 세지 않습니다.</p>
           </fieldset>
 
           <!-- STEP 2 · 환경 -->
@@ -164,10 +172,10 @@
           <fieldset class="step step-optional">
             <legend><span class="step-no">4</span>선택 사항</legend>
             <details class="configuration-details" id="loginDetails">
-              <summary>로그인 · 테스트 계정 / 수동 로그인 / 아이디 기억</summary>
+              <summary>로그인 · 테스트 계정 / 로그인 폼 선택자 / 아이디 기억</summary>
               <div class="details-content">
                 <div class="login-option">
-                  <label class="checkbox-line"><input id="loginEnabled" type="checkbox" /><span><b>테스트 계정 자동 로그인</b> · 계정·비밀번호는 이 PC의 비밀 파일(<code>setup_login_windows.bat</code>)에서만 읽습니다. 선택자를 비우면 로그인 링크 → 비밀번호 입력란 → 그 앞의 아이디 입력란을 <b>자동 탐지</b>합니다</span></label>
+                  <input id="loginEnabled" type="checkbox" hidden /><p class="helper"><b>테스트 계정 자동 로그인</b>은 1단계 인증 상태를 <b>로그인</b>으로 고르면 켜집니다. 계정은 ① 프로젝트 설정의 환경별 로그인 정보 ② 아래 공용 테스트 계정(<code>secrets/accounts.json</code>) 순으로 씁니다. 선택자를 비우면 로그인 링크 → 비밀번호 입력란 → 그 앞의 아이디 입력란을 <b>자동 탐지</b>합니다.</p>
                   <div class="credential-box" id="credentialBox">
                     <div class="credential-status"><span id="credentialState" class="job-state">확인 중</span><span id="credentialText" class="helper">공용 테스트 계정 상태를 불러오는 중입니다.</span></div>
                     <div class="credential-form">
@@ -201,7 +209,7 @@
                   </div>
                 </div>
                 <div class="login-option">
-                  <label class="checkbox-line"><input id="manualLogin" name="manualLogin" type="checkbox" /><span><b>수동 로그인</b> · 검사 전에 열린 브라우저에서 직접 로그인</span></label>
+                  <input id="manualLogin" name="manualLogin" type="checkbox" hidden /><p class="helper"><b>수동 로그인</b> · 1단계 인증 상태를 <b>수동 로그인</b>으로 고르면 검사 전에 브라우저가 열립니다.</p>
                   <p class="helper">로그인 창에 아이디·비밀번호를 직접 입력한 뒤 이 화면에서 ‘로그인 완료 · 계속’을 누릅니다. 이 도구는 비밀번호를 입력받거나 저장하지 않습니다.</p>
                 </div>
                 <label class="checkbox-line"><input id="rememberIds" type="checkbox" /><span>이 브라우저에 아이디만 기억하기</span></label>

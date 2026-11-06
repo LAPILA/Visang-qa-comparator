@@ -129,6 +129,14 @@ def unexecuted_status(reason):
     return 'SKIP'
 
 
+_LOGIN_ACTION = re.compile(r'(?i)^\s*(로그인|log-?in|sign-?in)(\s*(하기|하러\s*가기|페이지))?\s*$')
+
+
+def login_action(action):
+    """An in-page control whose only job is to open/submit sign-in (e.g. a header 로그인 button)."""
+    return bool(_LOGIN_ACTION.match(str(action.get('label') or '')))
+
+
 def dangerous_action(action, level='strict'):
     combined = unquote(' '.join(str(action.get(k, '')) for k in ('label', 'name', 'href', 'url', 'formAction')))
     if _level(level) == 'test_account':

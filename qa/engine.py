@@ -7,6 +7,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import platform
+import re
 import time
 from collections import OrderedDict, deque
 from datetime import datetime, timezone
@@ -20,6 +21,7 @@ from playwright.sync_api import sync_playwright
 from .comparison import image_diff, visual_check
 from .matching import instance_template, match_pages, normalize_url, page_key
 from .policy import (readonly_navigation_reason, aggregate_status, check, classify_candidate, dangerous_action,
+                     login_action,
                      host_allowed, http_observation, route_allowed, sanitize_message, sanitize_url,
                      STATUSES, unexecuted_status, resource_allowed)
 
@@ -629,6 +631,10 @@ def _smoke_actions(page, record, options, budget, side, register):
         level = options.get('safety_level', 'strict')
         if not action.get('visible', True) or action.get('disabled') or dangerous_action(action, level):
             continue
+        if login_action(action):
+            # 로그인 buttons are the auth step's job (login mode) or out of scope (비로그인 mode).
+            action.update(state='SKIP', reason='LOGIN_ACTION_NOT_SMOKED')
+            continue
         if not str(action.get('label') or '').strip():
             # Icon-only / overlay controls with no accessible name are not worth a blind click.
             continue
@@ -821,6 +827,52 @@ def _apply_entry_action(page, record, options, side, budget):
                                       expected='One approved click on the start page', actual=type(exc).__name__))
 
 
+_LOGIN_PATH = re.compile(r'(?:^|[/#])(?:member/|members/|user/|users/|auth/)?(?:login|signin|sign-in|log-in)(?:\.do|\.html?|\.jsp)?(?:$|[/?#&])', re.I)
+
+
+def is_login_url(url):
+    """Route-level heuristic for a sign-in page (path or hash route)."""
+    parts = urlsplit(str(url or ''))
+    return bool(_LOGIN_PATH.search((parts.path or '/') + ('#' + parts.fragment if parts.fragment else '')))
+
+
+def _login_page_basis(page):
+    """Why the current document is a sign-in screen, or None. A visible password field is required
+    unless the route itself is a login route, so ordinary pages are never mistaken for one."""
+    try:
+        password = page.locator('input[type=password]:visible').count() > 0
+    except Exception:
+        password = False
+    if password:
+        return 'PASSWORD_FIELD'
+    return 'LOGIN_ROUTE' if is_login_url(page.url) else None
+
+
+def _login_page_record(page, record, options, artifact_root, run_id, side, budget, state, basis):
+    """Record a landing on a sign-in screen as evidence, never as a PASS, and stop there."""
+    record['finalUrl'] = page.url
+    record['loginPage'] = True
+    event = {'url': sanitize_url(record['url']), 'landedUrl': sanitize_url(page.url), 'basis': basis,
+             'returnTo': sanitize_url(state.get('return_to') or '') or None}
+    if options.get('auth_mode') == 'anonymous':
+        event['result'] = 'RETURNED_TO_PREVIOUS'
+        record['checks'].append(check(side + '.auth', 'SKIP', 'LOGIN_REQUIRED_ANONYMOUS',
+                                      expected='비로그인 검사: 로그인 화면은 검사하지 않고 직전 페이지로 돌아가 탐색을 이어감',
+                                      actual=event))
+    else:
+        event['result'] = 'SESSION_LOST'
+        record['checks'].append(check(side + '.auth', 'BLOCKED', 'LOGIN_SESSION_LOST',
+                                      expected='로그인 검사: 로그인 후 인증이 필요한 페이지에 접근',
+                                      actual=event))
+    state.setdefault('auth_events', []).append(event)
+    if not budget.reason():
+        try:
+            _capture(page, record, options, artifact_root, run_id, side, budget)  # evidence of the redirect
+        except Exception:
+            pass
+    return record
+
+
 def _visit(context, url, side, depth, options, artifact_root, run_id, budget, state):
     record = dict(url=url, finalUrl=url, title='', heading='', structure='', statusCode=None,
                   issues=[], checks=[], screenshot=None, screenshotFile=None, regions=[], actions=[],
@@ -891,6 +943,9 @@ def _visit(context, url, side, depth, options, artifact_root, run_id, budget, st
             _apply_entry_action(page, record, options, side, budget)
         if options.get('dismiss_selectors') or options.get('auto_dismiss'):
             _dismiss_overlays(page, record, options, side, budget)
+        basis = _login_page_basis(page) if options.get('auth_mode') in ('anonymous', 'login') else None
+        if basis:
+            return _login_page_record(page, record, options, artifact_root, run_id, side, budget, state, basis)
         info = _discover(page, options, record, side)
         if info is None:
             return record
@@ -1239,11 +1294,12 @@ def _test_account_login(context, side, options, budget, state):
     from .secrets import load_credentials
     login = options.get('login') or {}
     seed = options['baseline_url' if side == 'a' else 'candidate_url']
-    target = login.get('url') or seed
-    credentials = load_credentials(side, login.get('accountKey', 'default'))
+    credentials = load_credentials(side, login.get('accountKey', 'default'),
+                                   project_ref=(options.get('credential_refs') or {}).get(side))
+    target = login.get('url') or (credentials.login_url if credentials else None) or seed
     if credentials is None:
         return check(side + '.login', 'BLOCKED', 'LOGIN_CREDENTIALS_MISSING',
-                     expected='QA_LOGIN_[A|B]_ID/PW environment variables or secrets/accounts.json',
+                     expected='QA_LOGIN_[A|B]_ID/PW, 프로젝트 설정의 환경 로그인 정보 or secrets/accounts.json',
                      actual='No credentials available on this machine'), None
     if not host_allowed(target, options['allowed_hosts']):
         return check(side + '.login', 'BLOCKED', 'LOGIN_HOST_NOT_APPROVED',
@@ -1320,7 +1376,7 @@ def _crawl(browser, side, options, artifact_root, run_id, progress, budget, auth
                                   service_workers='block', accept_downloads=False)
     state = dict(record=None, blocked=[], blocked_urls=set(), manual_auth=False, scenario_done=False)
     _network_guard(context, options, _seed_urls(options), side, state, budget)
-    pages, deferred = OrderedDict(), []
+    pages, deferred, parents = OrderedDict(), [], {}
     trails = {normalize_url(seed): ['start-page']}
     queue, seen = deque([(seed, 0)]), {normalize_url(seed)}
     sample_limit = int(options.get('instance_sample_limit', 3) or 0)
@@ -1375,6 +1431,7 @@ def _crawl(browser, side, options, artifact_root, run_id, progress, budget, auth
         if options.get('login') and not options.get('manual_login'):
             progress(f'{side.upper()}: 테스트 계정으로 로그인 중')
             login_check, credentials = _test_account_login(context, side, options, budget, state)
+            state['login_ok'] = login_check.get('status') == 'PASS'
             if credentials is not None:
                 # Never let the typed account name reach a capture.
                 masks = list(options.get('private_mask_selectors', []))
@@ -1389,7 +1446,26 @@ def _crawl(browser, side, options, artifact_root, run_id, progress, budget, auth
                 deferred.append(deferred_page(url, budget.reason(), depth))
                 break
             progress(f'{side.upper()}: {len(pages) + 1}/{options.get("max_pages", 5)} {sanitize_url(url)}')
+            # The page whose link led here: where a 비로그인 crawl "returns" after a login redirect.
+            state['return_to'] = parents.get(normalize_url(url))
             record = _visit(context, url, side, depth, options, artifact_root, run_id, budget, state)
+            if (record.get('loginPage') and options.get('auth_mode') == 'login' and state.get('login_ok')
+                    and state.get('relogins', 0) < 2 and not budget.reason()):
+                # Session expired mid-crawl: log in again once, then retry the page it bounced from.
+                state['relogins'] = state.get('relogins', 0) + 1
+                progress(f'{side.upper()}: 세션 만료 감지 · 다시 로그인')
+                relogin, _ = _test_account_login(context, side, options, budget, state)
+                event = state['auth_events'][-1]
+                if relogin.get('status') == 'PASS':
+                    retry = _visit(context, url, side, depth, options, artifact_root, run_id, budget, state)
+                    if not retry.get('loginPage'):
+                        event['result'] = 'RELOGIN_OK'
+                        retry['checks'].insert(0, check(side + '.auth', 'PASS', 'RELOGIN_OK', required=False,
+                                                        expected='세션 만료 후 재로그인하고 원래 페이지로 복귀',
+                                                        actual=dict(event)))
+                        record = retry
+                else:
+                    event['result'] = 'RELOGIN_FAILED'
             record['navigationTrail'] = trails.get(normalize_url(url), [])
             if normalize_url(url) in mirrored_identities:
                 record['mirroredFromBaseline'] = True
@@ -1401,6 +1477,11 @@ def _crawl(browser, side, options, artifact_root, run_id, progress, budget, auth
             for action in record['actions']:
                 href = action.pop('_navigation_url', None)
                 if not href or not action['allowed']:
+                    continue
+                if options.get('auth_mode') in ('anonymous', 'login') and is_login_url(href):
+                    # 비로그인: never open the sign-in page on purpose. 로그인: already signed in.
+                    action.update(state='SKIP', reason='LOGIN_LINK_ANONYMOUS' if options['auth_mode'] == 'anonymous'
+                                  else 'LOGIN_LINK_ALREADY_AUTHENTICATED')
                     continue
                 normalized = normalize_url(href)
                 action['_target_identity'] = normalized
@@ -1416,6 +1497,7 @@ def _crawl(browser, side, options, artifact_root, run_id, progress, budget, auth
                         deferred.append(deferred_page(normalized, 'SAMPLE_LIMIT_REACHED', depth + 1))
                         continue
                     template_counts[template] = template_counts.get(template, 0) + 1
+                parents[normalized] = url
                 trails[normalized] = [*record.get('navigationTrail', []),
                                       sanitize_message(action.get('label') or page_key(normalized), 100)]
                 if depth >= int(options.get('max_depth', 1)):
@@ -1699,6 +1781,12 @@ def run_scan(options, run_id, artifact_root, progress, cancelled, auth_gate=None
                               login={'method': 'MANUAL' if options.get('manual_login') else 'TEST_ACCOUNT' if options.get('login') else 'NONE',
                                      'form': {key: value for key, value in (options.get('login') or {}).items()} or None,
                                      'credentialsStored': False},
+                              auth={'mode': options.get('auth_mode', 'anonymous'),
+                                    'credentialSource': {side: 'PROJECT_ENVIRONMENT' for side in (options.get('credential_refs') or {})},
+                                    'loggedIn': {'a': bool(a_state.get('login_ok')), 'b': bool(b_state.get('login_ok'))}
+                                    if comparison else {'a': bool(a_state.get('login_ok'))},
+                                    'events': {'a': a_state.get('auth_events', [])[:50], 'b': b_state.get('auth_events', [])[:50]}
+                                    if comparison else {'a': a_state.get('auth_events', [])[:50]}},
                               scenarioIds=options.get('scenario_ids', []), conditions=options.get('conditions', []),
                               routeAliases=options.get('route_aliases', []), dataPolicy='INDEPENDENT_LIVE_WITH_CONFIGURED_MASKS'),
                 coverage=dict(discoveredPages=len(a) + len(b) + len(a_skip) + len(b_skip),

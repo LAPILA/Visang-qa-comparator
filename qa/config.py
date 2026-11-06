@@ -26,6 +26,7 @@ PROFILE_RESOURCE_HOSTS = {
     'secondary-mobile': list(_SHARED_ASSET_HOSTS),
 }
 XHR_POLICIES = ('allow_allowed_hosts', 'block_writes')
+AUTH_MODES = ('anonymous', 'login', 'manual')
 OBSERVATION_MODES = ('strict', 'lenient')
 SAFETY_LEVELS = ('strict', 'test_account')
 
@@ -187,6 +188,39 @@ def _login_config(value):
     return result
 
 
+def _credential_refs(value):
+    """Which 프로젝트 설정 environment supplies each side's login ID/PW. IDs only, never secrets."""
+    if value in (None, '', {}):
+        return {}
+    if not isinstance(value, dict) or set(value) - {'a', 'b'}:
+        raise ValueError("credentialRefs는 {'a': {...}, 'b': {...}} 형식이어야 합니다.")
+    refs = {}
+    for side, ref in value.items():
+        if ref in (None, '', {}):
+            continue
+        if not isinstance(ref, dict) or set(ref) - {'projectId', 'environmentId'}:
+            raise ValueError('credentialRefs 항목에는 projectId·environmentId만 넣습니다.')
+        try:
+            refs[side] = {key: str(uuid.UUID(str(ref.get(key, '')))) for key in ('projectId', 'environmentId')}
+        except ValueError as exc:
+            raise ValueError('credentialRefs의 프로젝트·환경 ID 형식이 올바르지 않습니다.') from exc
+    return refs
+
+
+def _auth_mode(merged, login, manual_login):
+    """One authoritative 인증 상태: 비로그인 / 로그인(테스트 계정) / 수동 로그인 — never two at once."""
+    mode = merged.get('authMode')
+    if mode in (None, ''):
+        mode = 'manual' if manual_login else 'login' if login else 'anonymous'
+    if mode not in AUTH_MODES:
+        raise ValueError('authMode는 anonymous(비로그인), login(로그인), manual(수동 로그인) 중 하나여야 합니다.')
+    if mode == 'login':
+        return mode, login or _login_config({'accountKey': 'default'}), False
+    if mode == 'manual':
+        return mode, None, True
+    return mode, None, False
+
+
 def _entry_config(value):
     """A single approved click that dismisses a cover/landing gate on the start page."""
     if value in (None, '', False, {}):
@@ -220,6 +254,7 @@ def public_options(options):
              'observation_mode': 'observationMode', 'smoke_actions': 'smokeActions', 'smoke_action_limit': 'smokeActionLimit',
              'safety_level': 'safetyLevel', 'smoke_fill_text': 'smokeFillText', 'capture_settle_ms': 'captureSettleMs',
              'auto_dismiss': 'autoDismiss', 'instance_sample_limit': 'instanceSampleLimit',
+             'auth_mode': 'authMode', 'credential_refs': 'credentialRefs',
              'crawl_scope': 'crawlScope', 'baseline_name': 'baselineName', 'candidate_name': 'candidateName',
              'baseline_environment_id': 'baselineEnvironmentId', 'candidate_environment_id': 'candidateEnvironmentId'}
     return {names.get(key, key): value for key, value in options.items()
@@ -253,7 +288,9 @@ def parse_options(data, base_origin):
         route_equivalence = _boolean(merged.get('routeEquivalence', True))
     except ValueError as exc:
         raise ValueError('동등 라우트 매칭 옵션은 true 또는 false여야 합니다.') from exc
-    login = _login_config(merged.get('login'))
+    auth_mode, login, manual_login = _auth_mode(merged, _login_config(merged.get('login')),
+                                                _boolean(merged.get('manualLogin', False)))
+    credential_refs = _credential_refs(merged.get('credentialRefs')) if auth_mode == 'login' else {}
     entry = _entry_config(merged.get('entry'))
     xhr_policy = merged.get('xhrPolicy', 'allow_allowed_hosts')
     if xhr_policy not in XHR_POLICIES:
@@ -389,7 +426,7 @@ def parse_options(data, base_origin):
         'timeout_seconds': _number(merged, 'timeoutSeconds', 180, 15, 3600, True),
         'action_interval': _number(merged, 'actionInterval', 0.25 if profile_id == 'synthetic-demo' else 1, 0.1, 10),
         'visual_threshold': _number(merged, 'visualThreshold', 2, 0.1, 100),
-        'manual_login': _boolean(merged.get('manualLogin', False)), 'viewport': viewport,
+        'manual_login': manual_login, 'auth_mode': auth_mode, 'credential_refs': credential_refs, 'viewport': viewport,
         'route_aliases': aliases, 'regions': regions, 'safe_actions': actions,
         'allowed_hosts': sorted(allowed_hosts), 'allowed_paths': paths, 'scenario_ids': scenarios,
         'data_policy': 'LIVE_INDEPENDENT',

@@ -131,7 +131,8 @@ def _login_page(side, error=False):
 
 def _page(side, feature, query, signed_in=None):
     esc = html.escape
-    title = {"": "Home", "search": "Search", "notice": "Notices", "detail": "Notice detail", "input": "Input length"}[feature]
+    title = {"": "Home", "search": "Search", "notice": "Notices", "detail": "Notice detail", "input": "Input length",
+             "mypage": "My page"}[feature]
     links = "".join(f'<a href="{_route(side, route)}">{label}</a>' for route, label in
                     [("", "Home"), ("search", "Search"), ("notice", "Notices"), ("input", "Input length")])
     required = '<button id="required-action" type="button">Help</button>' if side == "a" else ""
@@ -144,7 +145,9 @@ def _page(side, feature, query, signed_in=None):
         popup = ('<div id="demo-popup" class="layer-popup" role="dialog" style="position:fixed;left:10%;top:10%;width:80%;height:50%;background:#fff;border:2px solid #aa4560;z-index:50;padding:20px">'
                  '<h2>오늘의 공지</h2><p>Synthetic marketing popup shown only with ?popup=1.</p>'
                  '<button id="demo-popup-close" type="button">오늘 하루 보지 않기</button></div>') if query.get("popup", [""])[0] == "1" else ""
-        body = (popup + f'<section id="home-notice"><h2>Notices</h2><ul>{notice_list}</ul></section>'
+        members = (f'<section id="members"><h2>Members</h2><a id="mypage-link" href="{_route(side, "mypage")}">My page</a></section>'
+                   if query.get("members", [""])[0] == "1" else "")
+        body = (popup + members + f'<section id="home-notice"><h2>Notices</h2><ul>{notice_list}</ul></section>'
                 '<section><h2>Safe interface state</h2><button id="safe-toggle" type="button" aria-expanded="false" '
                 'aria-controls="safe-panel">Show details</button><div id="safe-panel" hidden>Deterministic local panel.</div></section>'
                 f'<section class="trap" data-qa-risk="mutation"><h2>Safety traps — do not execute</h2>'
@@ -162,6 +165,8 @@ def _page(side, feature, query, signed_in=None):
         else:
             body = f'<section><h2 id="notice-title" data-qa-dynamic>{esc(item)}</h2><p data-qa-dynamic>Local notice ID: {esc(item_id)}</p></section>'
         body += f'<a id="notice-list-link" href="{_route(side, "notice")}">Back to notices</a>'
+    elif feature == "mypage":
+        body = f'<section id="mypage"><h2>Members only</h2><p data-qa-dynamic>Signed in as {esc(signed_in or "")}</p></section>'
     elif feature == "search":
         keyword = query.get("q", [""])[0][:200]
         results = [text for text in ("Synthetic mathematics lesson", "Synthetic reading lesson") if keyword.strip() and keyword.casefold() in text.casefold()]
@@ -267,7 +272,7 @@ def handle_demo(handler, path):
         feature = feature[:-3]
     elif side == "b" and feature:
         feature = None
-    if feature not in {"", "search", "notice", "detail", "input"}:
+    if feature not in {"", "search", "notice", "detail", "input", "mypage"}:
         _respond(handler, 404, '{"error":"demo_route_not_found"}')
         return True
     cookies = {}
@@ -275,6 +280,15 @@ def handle_demo(handler, path):
         name, _, value = chunk.strip().partition("=")
         if name:
             cookies[name] = value
+    if feature == "mypage" and not cookies.get(f"demo_session_{side}"):
+        # Members-only fixture: anonymous visitors bounce to the sign-in page, like the real sites.
+        handler.send_response(302)
+        handler.send_header("Location", f"/demo/{side}/login")
+        handler.send_header("Content-Length", "0")
+        handler.send_header("Connection", "close")
+        handler.end_headers()
+        handler.close_connection = True
+        return True
     _respond(handler, 200, _page(side, feature, parse_qs(parsed.query, keep_blank_values=True),
                                  signed_in=cookies.get(f"demo_session_{side}") or None),
              "text/html; charset=utf-8")

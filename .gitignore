@@ -11,6 +11,7 @@ local-settings/
 !.env.example
 *.log
 .playwright-cli/
+.idea/
 mia/
 
 # Local test-account credentials (never commit)
