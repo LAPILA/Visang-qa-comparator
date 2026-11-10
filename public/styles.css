@@ -680,3 +680,18 @@ a.primary { display: inline-flex; align-items: center; }
 .auth-mode input[type=radio], .clear-password input, .rule-toggle input { min-height: 0; padding: 0; width: auto; box-shadow: none; }
 .environment-row label > input:not([type=checkbox]), .rule-fields input, .rule-fields select, .rule-fields textarea, .fields input { width: 100%; min-width: 0; }
 .environment-row > label, .environment-login-fields > label { min-width: 0; }
+
+/* 검사 규칙: 엑셀 가져오기 · 테스트 케이스 필드 (원안: 1105_mia m_rules.css) */
+.import-card { margin-bottom: 18px; }
+.rule-drop-zone { border: 2px dashed var(--line-strong); border-radius: var(--r-md); background: var(--surface-2); min-height: 104px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; color: var(--accent); cursor: pointer; padding: 18px; }
+.rule-drop-zone:hover, .rule-drop-zone.drag-over, .rule-drop-zone:focus-visible { border-color: var(--accent); background: var(--accent-soft); outline: none; }
+.rule-drop-zone strong { font-size: var(--fs-sm); }
+.rule-drop-zone span { font-size: 11px; color: var(--muted); }
+.import-summary { font-size: var(--fs-xs); color: var(--text-2); margin-top: 10px; line-height: 1.6; }
+.case-fields { display: grid; gap: 12px; border-top: 1px solid var(--line); margin-top: 16px; padding-top: 16px; }
+.case-fields > label:not(.case-automation), .case-meta-grid label { display: grid; gap: 6px; font-size: var(--fs-xs); font-weight: 700; color: var(--text-2); }
+.case-fields input:not([type=checkbox]), .case-fields textarea { width: 100%; min-width: 0; }
+.case-automation { display: flex; align-items: center; gap: 8px; font-size: var(--fs-xs); font-weight: 700; color: var(--text); }
+.case-automation input { width: auto; min-height: 0; accent-color: var(--accent); }
+.case-meta-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 700px) { .case-meta-grid { grid-template-columns: 1fr; } }

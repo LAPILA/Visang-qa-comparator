@@ -1,3 +1,4 @@
+// 실행 결과: 실행 목록(경량 요약 version 비교로 갱신) + 선택 실행의 진행 단계·검증식·증거. 원안: 1105_mia
 const $ = selector => document.querySelector(selector);
 const stateNames = { running: '검사 중', awaiting_auth: '로그인 대기', done: '검사 완료', cancelled: '중단됨', error: '실행 오류' };
 const typeNames = { comparison: '환경 비교', single: '단일 환경', regression: '회귀 테스트', conditional: '조건 기반 UI' };
@@ -12,7 +13,7 @@ function element(tag, text, className) {
   if (className) node.className = className;
   return node;
 }
-function notice(message, error = false) { $('#notice').textContent = message; $('#notice').classList.toggle('error', error); }
+function notice(message, error = false) { $('#notice').textContent = message; $('#notice').className = `notice ${error ? 'error-notice' : 'success-notice'}`; }
 function date(value) {
   if (!value) return '시각 미기록';
   const parsed = new Date(value);
@@ -209,7 +210,7 @@ for (const button of document.querySelectorAll('.run-filter')) button.addEventLi
 });
 $('#refreshRuns').addEventListener('click', () => refresh(true));
 async function init() {
-  try { const boot = await get('/api/bootstrap'); profiles = new Map((boot.profiles || []).map(profile => [profile.id, profile.label || profile.id])); }
+  try { const boot = await get('/api/bootstrap'); profiles = new Map((boot.profiles || []).map(profile => [profile.id, profile.label || profile.id])); if (boot.version) $('#versionPill').textContent = `v${boot.version} · LOCAL`; }
   catch { /* Run IDs and state still render without profile labels. */ }
   await refresh();
   const poll = async () => { if (!document.hidden) await refresh(); setTimeout(poll, document.hidden ? 12000 : 4000); };

@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app import Server
-from qa import projects_db
+from qa import projects_db, rules_db
 from qa.config import parse_options
 from qa.engine import is_login_url, run_scan
 from qa.policy import login_action
@@ -28,6 +28,7 @@ class IsolatedStore:
         self.temp = tempfile.TemporaryDirectory()
         root = Path(self.temp.name)
         self.env = patch.dict(os.environ, {'QA_PROJECTS_FILE': str(root / 'projects.json'), 'QA_ENV_FILE': str(root / '.env'),
+                                           'QA_RULES_FILE': str(root / 'rules.json'),
                                            'QA_SECRETS_FILE': str(root / 'missing-accounts.json')})
         self.env.start()
         for key in (*PG_KEYS, *LOGIN_KEYS[:-1]):
@@ -94,6 +95,33 @@ class ProjectStoreTests(unittest.TestCase):
             self.assertEqual(side.password, 'side-pw')
             self.assertIsNone(load_credentials('a', project_ref={'projectId': PROJECT_ID, 'environmentId': str(uuid.uuid4())},
                                                environ={}))
+
+
+def rule(rule_id=None, key='notice.empty', ready=True, project_id=None):
+    condition = {'id': key, 'case': 'custom', 'selector': '#empty', 'kind': 'visible', 'expected': True, 'preconditions': []} \
+        if ready else {'id': key}
+    return {'id': rule_id or str(uuid.uuid4()), 'projectId': project_id or PROJECT_ID, 'name': '빈 목록 안내',
+            'condition': condition, 'caseData': {'steps': '목록 열기'}, 'automationReady': ready, 'enabled': True,
+            'source': {'fileName': 'qa.xlsx', 'sheet': 'TC', 'row': 3, 'caseId': 'TC-01'}}
+
+
+class RuleStoreTests(unittest.TestCase):
+    def test_file_backend_rules_follow_project_lifecycle(self):
+        with IsolatedStore():
+            projects_db.save_project(project())
+            first = rule()
+            self.assertEqual(rules_db.save_rules([first, rule(key='manual.case', ready=False)]), 2)
+            listed = {item['condition']['id']: item for item in rules_db.list_rules()}
+            self.assertTrue(listed['notice.empty']['enabled'])
+            self.assertFalse(listed['manual.case']['enabled'])  # 매핑 필요 케이스는 활성화되지 않음
+            self.assertEqual(listed['notice.empty']['source']['caseId'], 'TC-01')
+            with self.assertRaises(rules_db.RuleConflict):
+                rules_db.save_rules([rule(key='notice.empty')])
+            with self.assertRaises(ValueError):
+                rules_db.save_rules([rule(project_id=str(uuid.uuid4()))])
+            self.assertTrue(rules_db.delete_rule(first['id']))
+            projects_db.delete_project(PROJECT_ID)
+            self.assertEqual(rules_db.list_rules(), [])
 
 
 class AuthModeOptionTests(unittest.TestCase):
@@ -234,6 +262,25 @@ class ProjectApiTests(unittest.TestCase):
         self.assertTrue(listed['projects'][0]['environments'][0]['hasPassword'])
         self.assertNotIn('api-secret', json.dumps(listed))
         self.assertEqual(self.request('POST', '/api/projects/delete', {'id': PROJECT_ID}), (200, {'deleted': True}))
+
+    def test_rules_api_and_excel_import(self):
+        self.assertEqual(self.request('POST', '/api/projects/save', project())[0], 200)
+        self.assertEqual(self.request('POST', '/api/rules/batch', {'rules': [rule()]}), (200, {'saved': 1}))
+        status, body = self.request('POST', '/api/rules/save', rule(key='notice.empty'))
+        self.assertEqual(status, 409, body)
+        status, listed = self.request('GET', '/api/rules')
+        self.assertEqual((status, len(listed['rules'])), (200, 1))
+        from openpyxl import Workbook
+        import io
+        workbook = Workbook(); sheet = workbook.active
+        sheet.append(['TC ID', '제목', '판정기준']); sheet.append(['TC-9', '로그인 안내', '안내가 보인다'])
+        stream = io.BytesIO(); workbook.save(stream)
+        connection = http.client.HTTPConnection('127.0.0.1', self.port, timeout=5)
+        connection.request('POST', '/api/rules/import', body=stream.getvalue(), headers={
+            'Host': f'127.0.0.1:{self.port}', 'X-QA-Token': self.token, 'Origin': f'http://127.0.0.1:{self.port}',
+            'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
+        response = connection.getresponse(); imported = json.loads(response.read()); connection.close()
+        self.assertEqual((response.status, imported['cases'][0]['caseId']), (200, 'TC-9'))
 
     def test_login_mode_without_account_is_refused_before_start(self):
         status, body = self.request('POST', '/api/scans', {'profileId': 'synthetic-demo', 'operatorId': 'QA-A', 'authMode': 'login'})
