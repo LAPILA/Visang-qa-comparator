@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 from qa import __version__
 from qa.config import parse_options, profiles, validate_url
 from qa import projects_db
+from qa import rules_db
 from qa.store import ReportStore, ReviewConflict, RunDirectoryLease, redact, timestamp
 
 ROOT = Path(__file__).resolve().parent
@@ -117,6 +118,7 @@ class JobService:
             job = {'id': run_id, 'schemaVersion': '2.0', 'state': 'running',
                    'progress': '브라우저 실행 준비 중', 'operatorId': options['operator_id'],
                    'profileId': options['profile_id'], 'startedAt': timestamp(), 'finishedAt': None,
+                   'progressHistory': [{'at': timestamp(), 'state': 'running', 'message': '브라우저 실행 준비 중'}],
                    'report': None, 'error': None, 'authSide': None, 'options': options}
             self.store.save(job)
             self.jobs[run_id] = job
@@ -139,8 +141,8 @@ class JobService:
         saved = {item['id']: item for item in self.store.list()}
         with self.lock:
             for run_id, job in self.jobs.items():
-                saved[run_id] = {key: job.get(key) for key in
-                                ('id', 'state', 'progress', 'operatorId', 'profileId', 'startedAt', 'finishedAt')}
+                saved.setdefault(run_id, {}).update({key: job.get(key) for key in
+                                ('id', 'state', 'progress', 'operatorId', 'profileId', 'startedAt', 'finishedAt')})
                 saved[run_id].update(testType=job['options'].get('test_type', 'comparison'),
                                      totals=(job.get('report') or {}).get('totals'),
                                      schemaVersion=job.get('schemaVersion'))
@@ -168,6 +170,8 @@ class JobService:
             self.cancel_events[run_id].set()
             self.auth_events[run_id].set()
             self.jobs[run_id]['progress'] = '현재 단계 정리 후 중지합니다.'
+            self.jobs[run_id].setdefault('progressHistory', []).append({
+                'at': timestamp(), 'state': self.jobs[run_id]['state'], 'message': self.jobs[run_id]['progress']})
             self.store.save(self.jobs[run_id])
 
     def continue_auth(self, run_id):
@@ -187,6 +191,8 @@ class JobService:
         def progress(message):
             with self.lock:
                 job['progress'] = str(message)
+                job.setdefault('progressHistory', []).append({'at': timestamp(), 'state': job['state'], 'message': str(message)})
+                job['progressHistory'] = job['progressHistory'][-100:]
                 self.store.save(job)
 
         def auth_gate(side, context, url):
@@ -197,6 +203,7 @@ class JobService:
                 with self.lock:
                     job.update(state='awaiting_auth', authSide=side,
                                progress=f'{"기준 A" if side == "a" else "비교 B"} 브라우저에서 직접 로그인 후 계속을 누르세요.')
+                    job.setdefault('progressHistory', []).append({'at': timestamp(), 'state': 'awaiting_auth', 'message': job['progress']})
                     self.store.save(job)
                 while not self.auth_events[run_id].is_set() and not cancelled() and time.monotonic() < deadline:
                     # Let Playwright dispatch manual navigation and route callbacks.
@@ -207,6 +214,7 @@ class JobService:
                     raise TimeoutError('AUTH_TIME_LIMIT_REACHED: 수동 로그인 대기 시간 한도에 도달했습니다.')
                 with self.lock:
                     job.update(state='running', authSide=None, progress='수동 로그인 이후 검사 준비 중')
+                    job.setdefault('progressHistory', []).append({'at': timestamp(), 'state': 'running', 'message': job['progress']})
                     self.store.save(job)
             finally:
                 page.close()
@@ -244,14 +252,17 @@ class JobService:
                            progress='중단된 범위와 완료 결과를 저장했습니다.' if was_cancelled else
                                     '검사 종료 · 차단·누락 범위를 확인하세요.' if report['manifest'].get('status') == 'PARTIAL' else '검사 완료',
                            finishedAt=timestamp())
+                job.setdefault('progressHistory', []).append({'at': timestamp(), 'state': job['state'], 'message': job['progress']})
         except InterruptedError as exc:
             with self.lock:
                 job.update(state='cancelled', progress='검사를 중단했습니다.', error=str(exc),
                            authSide=None, finishedAt=timestamp())
+                job.setdefault('progressHistory', []).append({'at': timestamp(), 'state': 'cancelled', 'message': job['progress']})
         except Exception as exc:
             with self.lock:
                 job.update(state='error', progress='실행 오류가 발생했습니다.',
                            error=f'{type(exc).__name__}: {str(exc)[:1500]}', authSide=None, finishedAt=timestamp())
+                job.setdefault('progressHistory', []).append({'at': timestamp(), 'state': 'error', 'message': job['progress']})
         finally:
             with self.lock:
                 saved = False
@@ -342,17 +353,17 @@ class Handler(BaseHTTPRequestHandler):
         port = self.server.server_address[1]
         return self.headers.get('Host', '').lower() in (f'127.0.0.1:{port}', f'localhost:{port}')
 
-    def _parse_body(self):
+    def _parse_body(self, max_bytes=80000):
         # Read a bounded body before returning a rejection. Closing a Windows TCP
         # connection with unread POST bytes can reset the response before it arrives.
         try:
             length = int(self.headers.get('Content-Length', '0'))
         except ValueError as exc:
             raise ValueError('요청 길이가 올바르지 않습니다.') from exc
-        if not 0 < length <= 80000:
-            raise ValueError('요청은 1~80,000바이트여야 합니다.')
+        if not 0 < length <= max_bytes:
+            raise ValueError(f'요청은 1~{max_bytes:,}바이트여야 합니다.')
         previous_timeout = self.connection.gettimeout()
-        self.connection.settimeout(5)
+        self.connection.settimeout(15 if max_bytes > 80000 else 5)
         try:
             raw = self.rfile.read(length)
         finally:
@@ -378,6 +389,34 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError('JSON 객체가 필요합니다.')
         return value
 
+    def _parse_xlsx_upload(self):
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+        except ValueError as exc:
+            raise ValueError('업로드 크기가 올바르지 않습니다.') from exc
+        if not 0 < length <= 8_000_000:
+            raise ValueError('엑셀 파일은 8MB 이하여야 합니다.')
+        previous_timeout = self.connection.gettimeout()
+        self.connection.settimeout(15)
+        try:
+            raw = self.rfile.read(length)
+        finally:
+            self.connection.settimeout(previous_timeout)
+        if len(raw) != length:
+            raise ValueError('업로드 데이터가 완전하지 않습니다.')
+        if not self._valid_host():
+            raise PermissionError('로컬 호스트에서만 사용할 수 있습니다.')
+        origin = self.headers.get('Origin')
+        port = self.server.server_address[1]
+        if origin and origin not in (self.server.base_origin, f'http://localhost:{port}'):
+            raise PermissionError('다른 출처의 업로드는 허용하지 않습니다.')
+        if not secrets.compare_digest(self.headers.get('X-QA-Token', ''), self.server.session_token):
+            raise PermissionError('로컬 실행 토큰이 만료되었습니다. 화면을 새로고침하세요.')
+        if self.headers.get('Content-Type', '').split(';')[0].strip() not in (
+                'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/octet-stream'):
+            raise ValueError('.xlsx 파일이 필요합니다.')
+        return raw
+
     def do_GET(self):
         if not self._valid_host():
             return self.json_response(403, {'error': '허용되지 않은 호스트입니다.'})
@@ -390,6 +429,9 @@ class Handler(BaseHTTPRequestHandler):
                       '/app.js': ('app.js', 'text/javascript'), '/styles.css': ('styles.css', 'text/css'),
                       '/scan_shell.css': ('scan_shell.css', 'text/css'),
                       '/m_dashboard.html': ('m_dashboard.html', 'text/html'),
+                      '/m_results.html': ('m_results.html', 'text/html'),
+                      '/m_results.js': ('m_results.js', 'text/javascript'),
+                      '/m_results.css': ('m_results.css', 'text/css'),
                       '/m_project_settings.html': ('m_project_settings.html', 'text/html'),
                       '/m_workspace.css': ('m_workspace.css', 'text/css'),
                       '/m_workspace.js': ('m_workspace.js', 'text/javascript'),
@@ -414,6 +456,9 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/projects':
                 projects_db.initialize()
                 return self.json_response(200, {'projects': projects_db.list_projects()})
+            if path == '/api/rules':
+                rules_db.initialize()
+                return self.json_response(200, {'rules': rules_db.list_rules()})
             if path == '/api/scans':
                 return self.json_response(200, {'scans': self.server.service.list()})
             if path.startswith('/api/scans/') and path.endswith('/inventory.csv'):
@@ -475,6 +520,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urlsplit(self.path).path
         try:
+            if path == '/api/rules/import':
+                from qa.rule_import import parse_workbook
+                return self.json_response(200, parse_workbook(self._parse_xlsx_upload()))
             # Synthetic mutation traps are isolated test endpoints, never app actions.
             if path.startswith('/demo/'):
                 if not self._valid_host():
@@ -482,7 +530,7 @@ class Handler(BaseHTTPRequestHandler):
                 from qa.demo import handle_demo
                 if handle_demo(self, path):
                     return
-            data = self._parse_body()
+            data = self._parse_body(max_bytes=80_000_000 if path == '/api/rules/batch' else 80000)
             if self.server.service.closing:
                 return self.json_response(503, {'error': '서버가 종료 중입니다. 새 서버에서 다시 시도하세요.'})
             if path == '/api/projects/save':
@@ -491,6 +539,16 @@ class Handler(BaseHTTPRequestHandler):
             if path == '/api/projects/delete':
                 projects_db.initialize()
                 return self.json_response(200, {'deleted': projects_db.delete_project(data.get('id', ''))})
+            if path == '/api/rules/save':
+                rules_db.initialize()
+                rules_db.save_rules([data])
+                return self.json_response(200, {'ok': True})
+            if path == '/api/rules/batch':
+                rules_db.initialize()
+                return self.json_response(200, {'saved': rules_db.save_rules(data.get('rules'))})
+            if path == '/api/rules/delete':
+                rules_db.initialize()
+                return self.json_response(200, {'deleted': rules_db.delete_rule(data.get('id', ''))})
             if path == '/api/scans':
                 options = parse_options(data, self.server.base_origin)
                 run_id = self.server.service.start(options)
@@ -514,6 +572,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.json_response(403, {'error': str(exc)})
         except ReviewConflict as exc:
             return self.json_response(409, {'error': str(exc)})
+        except psycopg.errors.UniqueViolation:
+            return self.json_response(409, {'error': '같은 프로젝트에 동일한 규칙 ID가 있습니다.'})
         except psycopg.Error:
             return self.json_response(503, {'error': '프로젝트 DB에 연결하지 못했습니다.'})
         except (ValueError, TypeError, KeyError, OSError) as exc:

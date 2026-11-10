@@ -16,16 +16,17 @@
       <a href="/m_dashboard.html">▦ &nbsp; 대시보드</a>
       <a href="/m_project_settings.html">▣ &nbsp; 프로젝트 설정</a>
       <a href="/m_rules.html">◇ &nbsp; 검사 규칙</a>
-      <a class="active" href="/" aria-current="page">▶ &nbsp; 검사 실행·결과</a>
+      <a class="active" href="/" aria-current="page">▶ &nbsp; 검사 실행</a>
+      <a href="/m_results.html">▤ &nbsp; 실행 결과</a>
     </nav>
-    <div class="qa-side-note"><strong>검사 실행·결과</strong><p>검사 설정, 진행 상태, 증거와 검수 결과를 확인합니다.</p></div>
+    <div class="qa-side-note"><strong>검사 실행</strong><p>검사를 설정하고 시작합니다. 진행 상황과 상세 내역은 실행 결과에서 확인합니다.</p></div>
   </aside>
   <div class="qa-shell">
-    <header class="qa-topbar"><span>워크스페이스 / <strong>검사 실행·결과</strong></span><span class="qa-local-pill">● 로컬 QA</span></header>
+    <header class="qa-topbar"><span>워크스페이스 / <strong>검사 실행</strong></span><span class="qa-local-pill">● 로컬 QA</span></header>
   <main class="layout">
     <header class="qa-page-head">
       <p class="eyebrow">SCAN &amp; REVIEW</p>
-      <h1>검사 실행·결과</h1>
+      <h1>검사 실행</h1>
       <p class="subtitle">두 환경의 화면과 기능을 확인하고, 발견한 차이를 근거와 함께 검수합니다.</p>
     </header>
 
@@ -127,7 +128,7 @@
     </div>
 
     <section class="panel progress hidden" id="progressSection" aria-live="polite" aria-labelledby="progressTitle">
-      <div class="progress-top"><div><p class="eyebrow">ACTIVE RUN</p><h2 id="progressTitle">검사 실행 중</h2><p id="progressMeta" class="helper"></p></div><button id="cancelBtn" type="button" class="secondary danger">실행 중단</button></div>
+      <div class="progress-top"><div><p class="eyebrow">ACTIVE RUN</p><h2 id="progressTitle">검사 실행 중</h2><p id="progressMeta" class="helper"></p></div><div class="progress-actions"><a id="openResultsLink" class="secondary-button" href="/m_results.html">실행 결과 화면 →</a><button id="cancelBtn" type="button" class="secondary danger">실행 중단</button></div></div>
       <p id="progressText">브라우저 준비 중</p>
       <div id="authPanel" class="auth-panel hidden"><p id="authText">열린 브라우저에서 로그인한 뒤 계속해 주세요.</p><button id="continueBtn" class="primary" type="button">로그인 완료 · 계속</button></div>
       <div class="progress-rail" aria-hidden="true"><div class="progress-fill"></div></div>

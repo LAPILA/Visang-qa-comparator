@@ -17,4 +17,5 @@
 .qa-page-head .eyebrow{color:#8a79dc;font-weight:700;letter-spacing:2px;margin:0}
 .qa-page-head h1{font-size:29px;letter-spacing:-1px;margin:3px 0 6px}
 .qa-page-head .subtitle{margin:0;color:#8d96a9;font-size:13px;line-height:1.5}
+.progress-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 @media(max-width:700px){.qa-sidebar{position:static;width:auto;padding:16px;gap:8px}.qa-brand{padding:0}.qa-sidebar nav{display:flex;overflow:auto}.qa-sidebar nav a{white-space:nowrap}.qa-nav-caption,.qa-side-note{display:none}.qa-shell{margin-left:0}.qa-topbar{height:50px;padding:0 18px}.qa-shell .layout{padding:22px 16px}.qa-page-head h1{font-size:25px}}

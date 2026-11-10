@@ -159,6 +159,8 @@ class LocalHTTPAppTests(unittest.TestCase):
         job = self.await_state(created["id"], {"done", "error"})
         self.assertEqual(job["state"], "done", job)
         self.assertEqual(job["report"]["results"][0]["status"], "PASS")
+        self.assertTrue(any(event['message'] == 'Synthetic test runner' for event in job['progressHistory']))
+        self.assertEqual(job['progressHistory'][-1]['state'], 'done')
         self.assertIn("source_sha256", job["report"]["manifest"])
         self.assertEqual(self.request("GET", f'/api/scans/{created["id"]}.csv')[0], 200)
         self.assertEqual(self.request("GET", f'/api/scans/{created["id"]}.json')[0], 200)

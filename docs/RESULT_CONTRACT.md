@@ -53,6 +53,8 @@ job
 
 job의 `done`은 worker가 결과를 반환했다는 뜻이다. 제품 품질 PASS나 검사 범위 전체 완료를 뜻하지 않는다. `manifest.status`는 COMPLETED/PARTIAL/CANCELLED이며 필수 BLOCKED/ERROR나 미실행이 있으면 PARTIAL이 된다. worker/저장 실패는 job ERROR로 기록한다. 사용자 취소와 시간 한도는 구분한다.
 
+`GET /api/scans`는 실행별 경량 요약만 반환한다. 요약의 `updatedAt`은 저장 시각, `version`은 저장될 때마다 바뀌는 변경 식별자다. 진행 메시지·상태 변경과 완료 후 검수 변경도 새 버전을 만든다. 화면은 이 버전이 달라질 때 선택한 실행의 전체 보고서를 다시 조회한다. 기존 실행에 요약 파일이 없으면 저장된 보고서에서 한 번 생성한다. 요약은 판정의 원본이 아니며 `report.json`이 원본이다.
+
 ## 3. 검증식·대표 상태
 
 검증식의 공통 필드:

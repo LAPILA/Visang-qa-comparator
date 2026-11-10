@@ -317,7 +317,7 @@ COMMIT;
 - **`schema_migrations`**: `version` — 적용한 스키마 변경의 고유 이름; `applied_at` — 적용 시각.
 - **`projects`**: `id` — 프로젝트 UUID; `name` — 프로젝트 표시명; `created_at` — 최초 등록 시각; `updated_at` — 마지막 수정 시각.
 - **`project_environments`**: `id` — 환경 UUID; `project_id` — 소속 프로젝트; `name` — 환경 표시명; `start_url` — 해당 환경의 시작 주소; `sort_order` — 프로젝트 화면의 환경 순서; `created_at` — 등록 시각; `updated_at` — 수정 시각. 환경은 프로젝트당 여러 개이며 실행마다 필요한 A/B만 고른다.
-- **`project_rules`**: `id` — 규칙 UUID; `project_id` — 소속 프로젝트; `name` — 사람이 읽는 규칙 이름; `rule_key` — 프로젝트 안에서 유일한 조건 ID(`condition.id`); `condition_json` — 선택자·종류·기대값·URL 패턴·선행 조건을 포함한 `qa/conditions.py` 계약; `enabled` — 검사 설정으로 가져올 수 있는 활성 여부(1/0); `created_at` — 등록 시각; `updated_at` — 수정 시각. 활성화만으로 과거 결과를 다시 판정하지 않는다.
+- **`project_rules`**: `id` — 규칙 UUID; `project_id` — 소속 프로젝트; `name` — 사람이 읽는 규칙 이름; `rule_key` — 프로젝트 안에서 유일한 조건 ID(`condition.id`); `condition_json` — 자동 실행 조건(`condition`), 사람이 수정할 테스트 케이스 내용(`caseData`), 자동 실행 가능 여부(`automationReady`), 엑셀 출처(`source`)를 담은 JSON 객체. 자동 실행 조건은 `qa/conditions.py` 계약을 따른다; `enabled` — 활성 여부(1/0); `created_at` — 등록 시각; `updated_at` — 수정 시각. 활성화만으로 과거 결과를 다시 판정하지 않는다.
 - **`runs`**: `id` — 실행 UUID; `project_id` — 선택 프로젝트(프로젝트 없이 직접 실행 시 NULL); `schema_version` — 저장 결과 형식 버전(현재 2.0); `operator_id` — 실행 때 입력한 담당자 ID, 인증 계정이 아님; `profile_id` — 엔진의 제품/검사 프로필 ID, 프로젝트 ID와 다름; `test_type` — 환경 비교·단일·회귀·조건 UI 목적; `mode` — 통합·시각·탐색 검사 구성; `state` — worker의 실행/로그인 대기/종료/중단/오류 상태; `report_status` — 검사 범위의 완료/부분/취소 상태; `previous_run_id` — 회귀 비교 기준 실행; `started_at` — 시작 시각; `finished_at` — 종료 시각; `progress_text` — 진행 메시지; `error_code` — worker·저장 오류 코드; `auth_side` — 수동 로그인 대기 중인 A/B; `options_json` — 실제 실행 설정 사본(한도, 허용 경로·호스트, 별칭, 영역, 시나리오, 조건, 마스크 등); `manifest_json` — 도구·규칙·범위·캡처 버전과 hash; `coverage_json` — 방문·차단·미실행 범위; `totals_json` — 상태별 행/검증식 및 고유 발견 사항 등의 서로 다른 집계. `state=done`은 품질 PASS가 아니다.
 - **`run_environments`**: `id` — 실행 대상 환경 UUID; `run_id` — 소속 실행; `project_environment_id` — 선택한 등록 환경(직접 입력 시 NULL); `side` — 실행 내 역할 A/B; `name` — 실행 당시 환경 이름 사본; `start_url` — 실행 당시 시작 URL 사본; `final_url` — 이동 후 최종 URL; `environment_registry_id` — 엔진 제공 환경 ID(production/staging/vibe-dev/legacy-dev/custom). 프로젝트의 환경 UUID를 엔진 등록 ID와 혼동하지 않는다.
 - **`run_rules`**: `id` — 적용 규칙 사본 UUID; `run_id` — 소속 실행; `source_rule_id` — 원래 프로젝트 규칙(삭제 후 NULL 가능); `rule_key` — 실행 시점 조건 ID; `rule_name` — 실행 시점 표시명; `condition_json` — 실제 실행에 전달된 조건 사본; `source_updated_at` — 원 규칙의 당시 수정 시각; `applied_at` — 실행 설정에 확정한 시각. `checks.check_id` 또는 조건 ID를 통해 실행 결과와 대조한다.
@@ -353,7 +353,7 @@ COMMIT;
 | 조건 기반 검사의 `conditions`, 활성 프로젝트 규칙 | `runs.options_json`의 실제 조건 배열 + `run_rules.condition_json`의 규칙별 사본; 결과는 `checks`/`result_rows` |
 | 탐색·오류·이미지/차이·검수·회귀 | `crawl_nodes`/`observations`/`evidence`/`result_rows`/`review_events`/`regression_items` |
 
-**현재 구현과의 차이:** 지금 실행 화면은 프로젝트 환경을 브라우저 저장소에서 읽지만, 실행 API에 `projectId`/`projectEnvironmentId`를 보내거나 보고서에 저장하지 않는다. 검사 규칙도 브라우저에서 활성 조건을 `conditions`로 가져올 뿐 `source_rule_id`를 서버에 전달하지 않는다. 따라서 `runs.project_id`, `run_environments.project_environment_id`, `run_rules.source_rule_id`는 **DB 연결 시 추가할 계약**이며 현재 JSON 보고서에서 자동 복원할 수 있다고 가정하면 안 된다. 지금의 옵션·조건·결과는 `qa/config.py`와 보고서 JSON에 저장된다.
+**현재 구현과의 차이:** 프로젝트와 환경, 검사 규칙은 PostgreSQL에서 읽고 저장한다. 실행 API는 아직 `projectId`/`projectEnvironmentId` 또는 `source_rule_id`를 보고서에 저장하지 않는다. 따라서 `runs.project_id`, `run_environments.project_environment_id`, `run_rules.source_rule_id`는 **실행 이력 DB 연결 시 추가할 계약**이며 현재 JSON 보고서에서 자동 복원할 수 있다고 가정하면 안 된다. 지금의 실행 옵션·조건·결과는 `qa/config.py`와 보고서 JSON에 저장된다.
 
 ## 적용 및 공유 규칙
 
