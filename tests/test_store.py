@@ -4,6 +4,7 @@ import tempfile
 import threading
 import unittest
 import uuid
+from unittest.mock import patch
 from urllib.parse import parse_qsl, urlsplit
 
 from qa.store import ReportStore, ReviewConflict, RunDirectoryLease, redact
@@ -36,6 +37,28 @@ class ReportStoreTests(unittest.TestCase):
         self.assertEqual(reopened.list()[0]["operatorId"], "QA-A")
         self.assertEqual(reopened.get(self.run_id)["report"]["results"][0]["visual"]["differencePercent"], 0)
         self.assertEqual(list(Path(self.temp.name).glob("**/*.tmp")), [])
+
+    def test_list_uses_small_summary_and_rebuilds_legacy_summary(self):
+        job = self.job()
+        self.store.save(job)
+        summary_path = Path(self.temp.name) / self.run_id / 'm_summary.json'
+        self.assertTrue(summary_path.is_file())
+        with patch.object(self.store, 'get', side_effect=AssertionError('full report read')):
+            first = self.store.list()[0]
+        self.assertEqual(first['state'], 'done')
+        self.assertEqual(first['totals'], {'FAIL': 1})
+        self.assertIn('version', first)
+        self.assertNotIn('reportMtimeNs', first)
+
+        summary_path.unlink()
+        rebuilt = self.store.list()[0]
+        self.assertTrue(summary_path.is_file())
+        self.assertEqual(rebuilt['id'], self.run_id)
+        with patch.object(self.store, 'get', side_effect=AssertionError('full report read')):
+            self.assertEqual(self.store.list()[0]['version'], rebuilt['version'])
+
+        self.store.review(self.run_id, 'row-1', 'QA-A', 'BUG_CONFIRMED', 'Confirmed', 0)
+        self.assertNotEqual(self.store.list()[0]['version'], rebuilt['version'])
 
     def test_interrupted_runs_recover_as_error_without_losing_partial_evidence(self):
         for state in ("running", "awaiting_auth"):

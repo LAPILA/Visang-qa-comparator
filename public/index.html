@@ -18,13 +18,14 @@
       <a href="/m_dashboard.html" data-page="dashboard"><span class="nav-icon">▦</span>대시보드</a>
       <a href="/m_project_settings.html" data-page="projects"><span class="nav-icon">▣</span>프로젝트 설정</a>
       <a href="/m_rules.html" data-page="rules"><span class="nav-icon">◇</span>검사 규칙</a>
-      <a href="/" data-page="run"><span class="nav-icon">▶</span>검사 실행·결과</a>
+      <a href="/" data-page="run"><span class="nav-icon">▶</span>검사 실행</a>
+      <a href="/m_results.html" data-page="results"><span class="nav-icon">▤</span>실행 결과</a>
     </nav>
     <div class="side-note"><strong>검사 결과 읽기</strong>실행 완료와 품질 판정은 다릅니다. 검수 분류(이슈·대인체크·재검)와 증거를 함께 확인하세요.</div>
     <div class="theme-switch" role="group" aria-label="테마"><button type="button" data-theme="light">☀ 라이트</button><button type="button" data-theme="dark">☾ 다크</button><button type="button" data-theme="system">◐ 시스템</button></div>
   </aside>
   <div class="shell">
-  <nav class="topbar" aria-label="현재 위치"><span>워크스페이스 / <strong>검사 실행·결과</strong></span><span class="topbar-links"><a href="#settingsTitle">검사 설정</a><a href="#historyTitle">실행 이력</a><a href="#resultTitle">검사 결과</a></span><span class="version-pill" id="versionPill">v0.5 · LOCAL</span></nav>
+  <nav class="topbar" aria-label="현재 위치"><span>워크스페이스 / <strong>검사 실행</strong></span><span class="topbar-links"><a href="#settingsTitle">검사 설정</a><a href="#historyTitle">실행 이력</a><a href="#resultTitle">검사 결과</a></span><span class="version-pill" id="versionPill">v0.5 · LOCAL</span></nav>
   <main class="layout" id="top">
     <header class="page-header">
       <div class="hero">
@@ -252,7 +253,7 @@
     </div>
 
     <section class="panel progress hidden" id="progressSection" aria-live="polite" aria-labelledby="progressTitle">
-      <div class="progress-top"><div><p class="eyebrow">ACTIVE RUN</p><h2 id="progressTitle">검사 실행 중</h2><p id="progressMeta" class="helper"></p></div><button id="cancelBtn" type="button" class="secondary danger">실행 중단</button></div>
+      <div class="progress-top"><div><p class="eyebrow">ACTIVE RUN</p><h2 id="progressTitle">검사 실행 중</h2><p id="progressMeta" class="helper"></p></div><div class="progress-actions"><a id="openResultsLink" class="secondary-button" href="/m_results.html">실행 결과 화면 →</a><button id="cancelBtn" type="button" class="secondary danger">실행 중단</button></div></div>
       <p id="progressText">브라우저 준비 중</p>
       <div id="authPanel" class="auth-panel hidden"><p id="authText">열린 브라우저에서 로그인한 뒤 계속해 주세요.</p><button id="continueBtn" class="primary" type="button">로그인 완료 · 계속</button></div>
       <div class="progress-rail" aria-hidden="true"><div class="progress-fill"></div></div>

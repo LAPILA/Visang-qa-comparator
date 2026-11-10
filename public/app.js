@@ -400,6 +400,7 @@ function updateProgress(job) {
   visible($('#progressSection'), true);
   $('#progressTitle').textContent = job.state === 'awaiting_auth' ? '수동 로그인 대기' : '검사 실행 중';
   $('#progressMeta').textContent = `${job.operatorId || '담당자'} · ${profileLabel(job.profileId)} · ${dateText(job.startedAt)}`;
+  $('#openResultsLink').href = `/m_results.html?run=${encodeURIComponent(job.id)}`;
   $('#progressText').textContent = job.progress || '검사를 진행하고 있습니다.';
   visible($('#authPanel'), job.state === 'awaiting_auth');
   const side = ['a', 'baseline'].includes(String(job.authSide).toLowerCase()) ? '기준 A' : ['b', 'candidate'].includes(String(job.authSide).toLowerCase()) ? '비교 B' : job.authSide || '현재';

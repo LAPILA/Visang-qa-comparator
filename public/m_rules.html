@@ -17,9 +17,10 @@
       <a href="/m_dashboard.html" data-page="dashboard"><span class="nav-icon">▦</span>대시보드</a>
       <a href="/m_project_settings.html" data-page="projects"><span class="nav-icon">▣</span>프로젝트 설정</a>
       <a href="/m_rules.html" data-page="rules"><span class="nav-icon">◇</span>검사 규칙</a>
-      <a href="/" data-page="run"><span class="nav-icon">▶</span>검사 실행·결과</a>
+      <a href="/" data-page="run"><span class="nav-icon">▶</span>검사 실행</a>
+      <a href="/m_results.html" data-page="results"><span class="nav-icon">▤</span>실행 결과</a>
     </nav>
-    <div class="side-note"><strong>조건 기반 UI 규칙</strong>규칙은 이 브라우저에 저장됩니다. 활성 규칙을 검사 설정으로 가져온 뒤 대상 환경과 선행 조건을 확인하세요. 규칙은 화면을 읽기만 합니다.</div>
+    <div class="side-note"><strong>조건 기반 UI 규칙</strong>규칙은 프로젝트와 같은 저장소(이 PC 설정 파일 또는 로컬 PostgreSQL)에 저장됩니다. 활성 규칙을 검사 설정으로 가져온 뒤 대상 환경과 선행 조건을 확인하세요. 규칙은 화면을 읽기만 합니다.</div>
     <div class="theme-switch" role="group" aria-label="테마"><button type="button" data-theme="light">☀ 라이트</button><button type="button" data-theme="dark">☾ 다크</button><button type="button" data-theme="system">◐ 시스템</button></div>
   </aside>
   <div class="shell">
@@ -28,8 +29,14 @@
       <div class="page-head"><div><p class="eyebrow">CONDITIONS</p><h1>검사 규칙</h1><p class="lead">어떤 화면 요소를 어떤 기대값으로 확인할지 프로젝트별로 정의합니다. 긴 제목 넘침·빈 목록 안내·버튼 개수 같은 계약을 조건 기반 UI QA로 실행합니다.</p></div><button class="primary" id="newRule" type="button">+ 새 규칙</button></div>
       <div id="notice" class="notice success-notice" role="status">규칙을 불러오는 중입니다.</div>
       <label class="project-picker">프로젝트 <select id="projectId"><option value="">프로젝트를 선택하세요</option></select></label>
+      <section class="card import-card" aria-labelledby="importTitle">
+        <div class="card-head"><div><h2 id="importTitle">엑셀 테스트 케이스 가져오기</h2><p>프로젝트를 선택한 뒤 .xlsx 파일을 올리면 행별로 검사 규칙에 등록합니다.</p></div></div>
+        <div id="ruleDropZone" class="rule-drop-zone" role="button" tabindex="0" aria-label="엑셀 파일 선택 또는 드래그 업로드"><strong>엑셀 파일을 여기에 드래그하세요</strong><span>또는 클릭해서 .xlsx 파일 선택 · 최대 8MB, 2,000개 케이스</span><input id="ruleFile" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden></div>
+        <p class="hint">TC ID·제목·확인내용·테스트 단계·판정기준을 읽습니다. 선택자·검사 종류·기대값이 완전한 행만 자동 실행 대상으로 표시하고, 나머지도 모두 등록해 목록에서 수정할 수 있습니다. 한 번의 검사 설정에 적용할 수 있는 자동 규칙은 최대 30개입니다.</p>
+        <div id="importSummary" class="import-summary" role="status"></div>
+      </section>
       <div class="rules-layout">
-        <section class="card"><div class="card-head"><div><h2>등록 규칙</h2><p>활성 규칙만 검사 설정으로 가져옵니다.</p></div></div><div id="ruleList" class="rule-list"></div></section>
+        <section class="card"><div class="card-head"><div><h2>등록 규칙</h2><p>자동 실행 가능한 활성 규칙만 검사 설정으로 가져옵니다.</p></div></div><div id="ruleList" class="rule-list"></div></section>
         <section class="card">
           <div class="card-head"><div><h2 id="formTitle">규칙 만들기</h2><p>현재 화면을 읽는 조건만 등록할 수 있습니다.</p></div></div>
           <form id="ruleForm">
@@ -37,7 +44,7 @@
               <label>규칙 이름<input name="name" required maxlength="100" placeholder="예: 빈 목록 안내 표시"></label>
               <label>규칙 ID<input name="ruleId" required maxlength="100" pattern="[A-Za-z0-9_.-]+" placeholder="notice.empty.message"></label>
               <label>적용 URL 패턴<input name="urlPattern" maxlength="2000" placeholder="예: /notice*"></label>
-              <label>요소 선택자<input name="selector" required maxlength="500" placeholder="예: #empty-message"></label>
+              <label>요소 선택자<input name="selector" maxlength="500" placeholder="예: #empty-message"></label>
               <label>검사 종류<select name="kind"><option value="visible">표시 여부</option><option value="count">요소 개수</option><option value="text_length">텍스트 길이</option><option value="overflow">넘침 여부</option><option value="attribute">속성 값</option></select></label>
               <label id="booleanField">기대 결과<select name="booleanExpected"><option value="true">참 · 표시/넘침 있음</option><option value="false">거짓 · 표시/넘침 없음</option></select></label>
               <label id="numberField" class="hidden">기대 개수·길이 (정확히)<input name="numberExpected" type="number" min="0" max="1000000" step="1" value="0"></label>
@@ -45,6 +52,15 @@
               <label id="textField" class="hidden">기대 속성 값<input name="textExpected" maxlength="500" placeholder="예: 열기"></label>
               <label id="unitField" class="hidden">길이 단위<select name="unit"><option value="codepoints">Unicode code point</option><option value="utf16">UTF-16 code unit</option></select></label>
               <label class="wide">선행 조건 JSON 배열 (선택)<textarea name="preconditions" rows="4" spellcheck="false" placeholder="[]">[]</textarea></label>
+            </div>
+            <div class="case-fields">
+              <label class="case-automation"><input name="automationReady" type="checkbox" checked> 선택자·기대값으로 자동 실행</label>
+              <p class="hint">엑셀에서 일반 QA 케이스만 가져온 경우 체크를 해제한 채로 내용을 검토하고, 자동 검사 조건을 완성한 뒤 체크하세요.</p>
+              <label>확인내용<textarea name="checkTarget" rows="2" maxlength="4000"></textarea></label>
+              <label>테스트 단계<textarea name="steps" rows="3" maxlength="4000"></textarea></label>
+              <label>판정기준<textarea name="expectedResult" rows="3" maxlength="4000"></textarea></label>
+              <label>사전조건 설명<textarea name="preconditionsText" rows="2" maxlength="4000"></textarea></label>
+              <div class="case-meta-grid"><label>대분류<input name="category1" maxlength="200"></label><label>중분류<input name="category2" maxlength="200"></label><label>소분류/기능<input name="category3" maxlength="200"></label><label>테스트데이터<input name="testData" maxlength="1000"></label><label>계정조건<input name="accountCondition" maxlength="200"></label><label>플랫폼<input name="platform" maxlength="200"></label><label>브라우저<input name="browser" maxlength="200"></label><label>서버<input name="server" maxlength="200"></label></div>
             </div>
             <p class="hint">선행 조건은 최대 10개입니다. 예: [{"selector":".notice-row","kind":"count","expected":{"equals":0}}]. 데이터 조건을 만족하지 못하면 BLOCKED로 기록됩니다. 규칙 저장은 과거 결과를 변경하지 않습니다.</p>
             <div class="form-row"><button class="secondary" type="submit">규칙 저장</button><button class="primary" id="applyRules" type="button">활성 규칙을 검사 설정에 적용 →</button><button class="secondary danger" id="deleteRule" type="button">삭제</button></div>

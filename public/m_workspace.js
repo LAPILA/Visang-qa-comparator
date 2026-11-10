@@ -40,7 +40,7 @@ async function dashboard() {
     const body = $('#runsBody'); body.replaceChildren();
     for (const job of jobs.slice(0, 15)) {
       const tr = document.createElement('tr');
-      const link = node('a', date(job.startedAt)); link.href = '/?run=' + encodeURIComponent(job.id);
+      const link = node('a', date(job.startedAt)); link.href = '/m_results.html?run=' + encodeURIComponent(job.id);
       const first = document.createElement('td'); first.append(link);
       const state = document.createElement('td'); state.append(node('span', STATES[job.state] || job.state || '미기록', `job-state ${job.state || ''}`));
       const t = job.totals?.triage;

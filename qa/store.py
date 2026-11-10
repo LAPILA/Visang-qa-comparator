@@ -119,18 +119,44 @@ class ReportStore:
             raise ValueError('실행 ID가 올바르지 않습니다.') from exc
         return self.root / run_id / 'report.json'
 
+    @staticmethod
+    def _summary(job, report_path):
+        summary = {key: job.get(key) for key in
+                   ('id', 'state', 'progress', 'operatorId', 'profileId', 'startedAt', 'finishedAt')}
+        summary.update(totals=(job.get('report') or {}).get('totals'),
+                       testType=(job.get('options') or {}).get('test_type', 'comparison'),
+                       schemaVersion=job.get('schemaVersion', '1.0'),
+                       updatedAt=timestamp(), version=uuid.uuid4().hex,
+                       reportMtimeNs=report_path.stat().st_mtime_ns)
+        return summary
+
+    @staticmethod
+    def _write_summary(path, summary):
+        temporary = path.with_name('m_summary.' + uuid.uuid4().hex + '.tmp')
+        try:
+            temporary.write_text(json.dumps(summary, ensure_ascii=False), encoding='utf-8')
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
+
     def save(self, job):
         path = self._path(job['id'])
         with self.lock:
             path.parent.mkdir(parents=True, exist_ok=True)
             temporary = path.with_name('report.' + uuid.uuid4().hex + '.tmp')
-            payload = json.dumps(redact(job), ensure_ascii=False, indent=2, allow_nan=False)
+            safe_job = redact(job)
+            payload = json.dumps(safe_job, ensure_ascii=False, indent=2, allow_nan=False)
             try:
                 with temporary.open('w', encoding='utf-8', newline='\n') as stream:
                     stream.write(payload)
                     stream.flush()
                     os.fsync(stream.fileno())
                 os.replace(temporary, path)
+                try:
+                    self._write_summary(path.parent / 'm_summary.json', self._summary(safe_job, path))
+                except OSError:
+                    # The report remains authoritative; list() can rebuild the small summary.
+                    pass
             finally:
                 temporary.unlink(missing_ok=True)
 
@@ -154,16 +180,25 @@ class ReportStore:
         jobs = []
         with self.lock:
             for path in self.root.glob('*/report.json'):
+                summary_path = path.parent / 'm_summary.json'
                 try:
-                    job = self.get(path.parent.name)
-                except (ValueError, OSError):
-                    continue
-                if job:
-                    jobs.append({key: job.get(key) for key in
-                                 ('id', 'state', 'progress', 'operatorId', 'profileId', 'startedAt', 'finishedAt')}
-                                | {'totals': (job.get('report') or {}).get('totals'),
-                                   'testType': (job.get('options') or {}).get('test_type', 'comparison'),
-                                   'schemaVersion': job.get('schemaVersion', '1.0')})
+                    summary = json.loads(summary_path.read_text(encoding='utf-8'))
+                    if not isinstance(summary, dict) or summary.get('reportMtimeNs') != path.stat().st_mtime_ns:
+                        raise ValueError('Summary is stale')
+                except (OSError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
+                    try:
+                        job = self.get(path.parent.name)
+                        if not job:
+                            continue
+                        summary = self._summary(job, path)
+                        try:
+                            self._write_summary(summary_path, summary)
+                        except OSError:
+                            pass
+                    except (ValueError, OSError):
+                        continue
+                summary.pop('reportMtimeNs', None)
+                jobs.append(summary)
         return sorted(jobs, key=lambda item: item.get('startedAt') or '', reverse=True)
 
     def delete(self, run_id):
